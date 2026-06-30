@@ -111,6 +111,7 @@ fn rows_to_query_result(
             is_primary_key: false,
             default_value: None,
             max_length: None,
+            enum_values: None,
         })
         .collect();
 
@@ -199,6 +200,7 @@ impl DbConnection for SqliteDriver {
                 default_value: r.try_get::<Option<String>, _>(4).ok().flatten(),
                 is_primary_key: r.get::<i64, _>(5) > 0,
                 max_length: None,
+                enum_values: None,
             })
             .collect();
 

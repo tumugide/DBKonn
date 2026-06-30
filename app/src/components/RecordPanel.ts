@@ -5,6 +5,15 @@ import {
   cloneRowValue,
   parseFieldInput,
 } from "../lib/rowEdit";
+import {
+  fromDateTimeLocalValue,
+  getTemporalKind,
+  isNowValue,
+  SQL_NOW_SENTINEL,
+  toDateInputValue,
+  toDateTimeLocalValue,
+  toTimeInputValue,
+} from "../lib/temporal";
 
 export interface RecordPanelOptions {
   container: HTMLElement;
@@ -29,6 +38,22 @@ function esc(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function enumOptions(col: ColumnInfo, val: RowValue): string {
+  const current = typeof val === "string" ? val : "";
+  const values = [
+    ...new Set([
+      ...(current ? [current] : []),
+      ...(col.enum_values ?? []),
+    ]),
+  ];
+  return values
+    .map(
+      (v) =>
+        `<option value="${esc(v)}" ${current === v ? "selected" : ""}>${esc(v)}</option>`,
+    )
+    .join("");
 }
 
 export class RecordPanel {
@@ -86,12 +111,44 @@ export class RecordPanel {
         const val = draft[idx] ?? null;
         const isNull = val === null;
         const isPk = col.is_primary_key;
-        const typeHint = col.data_type + (col.is_primary_key ? " · PK" : "");
+        const temporal = getTemporalKind(col.data_type);
+        const useNow = isNowValue(val);
+        const typeHint =
+          col.data_type +
+          (col.is_primary_key ? " · PK" : "") +
+          (useNow ? " · NOW()" : "");
 
         let inputHtml: string;
-        if (typeof val === "boolean") {
+        if (col.enum_values && col.enum_values.length > 0) {
           inputHtml = `
-            <select class="record-field-input" data-idx="${idx}" ${isPk ? "disabled" : ""}>
+            <select class="record-field-input" data-idx="${idx}" data-kind="enum"
+              ${isPk || isNull ? "disabled" : ""}>
+              ${enumOptions(col, val)}
+            </select>`;
+        } else if (temporal === "date") {
+          inputHtml = `
+            <input class="record-field-input" data-idx="${idx}" data-kind="date" type="date"
+              value="${esc(toDateInputValue(val))}"
+              ${isPk || isNull ? "disabled" : ""} />`;
+        } else if (temporal === "timestamp") {
+          inputHtml = `
+            <div class="record-datetime-row" data-idx="${idx}">
+              <input class="record-field-input" data-idx="${idx}" data-kind="datetime" type="datetime-local"
+                step="1"
+                value="${esc(toDateTimeLocalValue(val))}"
+                ${isPk || isNull || useNow ? "disabled" : ""} />
+              <button type="button" class="btn btn-secondary record-now-btn${useNow ? " active" : ""}"
+                data-idx="${idx}" ${isPk || isNull ? "disabled" : ""}>NOW()</button>
+            </div>`;
+        } else if (temporal === "time") {
+          inputHtml = `
+            <input class="record-field-input" data-idx="${idx}" data-kind="time" type="time"
+              step="1"
+              value="${esc(toTimeInputValue(val))}"
+              ${isPk || isNull ? "disabled" : ""} />`;
+        } else if (typeof val === "boolean") {
+          inputHtml = `
+            <select class="record-field-input" data-idx="${idx}" data-kind="boolean" ${isPk ? "disabled" : ""}>
               <option value="true" ${val ? "selected" : ""}>true</option>
               <option value="false" ${!val ? "selected" : ""}>false</option>
             </select>`;
@@ -159,12 +216,43 @@ export class RecordPanel {
     });
 
     this.container.querySelectorAll(".record-field-input").forEach((el) => {
-      el.addEventListener("input", () => this.syncDraftFromDom());
+      el.addEventListener("input", () => {
+        if (
+          el instanceof HTMLInputElement &&
+          el.dataset["kind"] === "datetime"
+        ) {
+          const idx = el.dataset["idx"];
+          const nowBtn = this.container.querySelector<HTMLButtonElement>(
+            `.record-now-btn[data-idx="${idx}"]`,
+          );
+          if (nowBtn?.classList.contains("active")) {
+            nowBtn.classList.remove("active");
+            el.disabled = false;
+          }
+        }
+        this.syncDraftFromDom();
+      });
       el.addEventListener("change", () => this.syncDraftFromDom());
     });
 
     this.container.querySelectorAll(".record-null-toggle").forEach((el) => {
       el.addEventListener("change", () => {
+        this.syncDraftFromDom();
+        this.render();
+      });
+    });
+
+    this.container.querySelectorAll(".record-now-btn").forEach((el) => {
+      el.addEventListener("click", () => {
+        const btn = el as HTMLButtonElement;
+        if (btn.disabled) return;
+        const idx = btn.dataset["idx"]!;
+        const input = this.container.querySelector<HTMLInputElement>(
+          `.record-field-input[data-idx="${idx}"][data-kind="datetime"]`,
+        );
+        const activating = !btn.classList.contains("active");
+        btn.classList.toggle("active", activating);
+        if (input) input.disabled = activating;
         this.syncDraftFromDom();
         this.render();
       });
@@ -189,15 +277,41 @@ export class RecordPanel {
       const input = this.container.querySelector<HTMLElement>(
         `.record-field-input[data-idx="${idx}"]`,
       );
+      const nowBtn = this.container.querySelector<HTMLButtonElement>(
+        `.record-now-btn[data-idx="${idx}"]`,
+      );
+      const temporal = getTemporalKind(col.data_type);
+
+      if (nowBtn?.classList.contains("active")) {
+        draft[idx] = isNull ? null : SQL_NOW_SENTINEL;
+        return;
+      }
+
       if (!input) return;
 
       const original = this.record!.original[idx] ?? null;
       if (input instanceof HTMLSelectElement) {
-        draft[idx] = input.value === "true";
+        if (col.enum_values && col.enum_values.length > 0) {
+          draft[idx] = isNull ? null : input.value;
+        } else if (typeof original === "boolean") {
+          draft[idx] = input.value === "true";
+        } else {
+          draft[idx] = isNull ? null : input.value;
+        }
       } else if (input instanceof HTMLTextAreaElement) {
         draft[idx] = parseFieldInput(input.value, isNull, original);
       } else if (input instanceof HTMLInputElement) {
-        draft[idx] = parseFieldInput(input.value, isNull, original);
+        if (isNull) {
+          draft[idx] = null;
+        } else if (temporal === "date") {
+          draft[idx] = input.value;
+        } else if (temporal === "timestamp") {
+          draft[idx] = fromDateTimeLocalValue(input.value);
+        } else if (temporal === "time") {
+          draft[idx] = input.value;
+        } else {
+          draft[idx] = parseFieldInput(input.value, isNull, original);
+        }
       }
     });
 

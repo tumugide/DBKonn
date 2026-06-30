@@ -123,6 +123,7 @@ fn rows_to_query_result(
             is_primary_key: false,
             default_value: None,
             max_length: None,
+            enum_values: None,
         })
         .collect();
 
@@ -204,7 +205,7 @@ impl DbConnection for MySqlDriver {
         let db = schema.unwrap_or(&self.database);
 
         let col_rows = sqlx::query(
-            "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
+            "SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
                     CHARACTER_MAXIMUM_LENGTH, COLUMN_KEY
              FROM information_schema.COLUMNS
              WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
@@ -217,13 +218,22 @@ impl DbConnection for MySqlDriver {
 
         let columns: Vec<ColumnInfo> = col_rows
             .iter()
-            .map(|r| ColumnInfo {
-                name: r.get::<String, _>(0),
-                data_type: r.get::<String, _>(1),
-                nullable: r.get::<String, _>(2) == "YES",
-                default_value: r.try_get::<Option<String>, _>(3).ok().flatten(),
-                max_length: r.try_get::<Option<i64>, _>(4).ok().flatten(),
-                is_primary_key: r.get::<String, _>(5) == "PRI",
+            .map(|r| {
+                let column_type: String = r.get(2);
+                let enum_values = crate::schema::parse_mysql_enum_type(&column_type);
+                ColumnInfo {
+                    name: r.get::<String, _>(0),
+                    data_type: if enum_values.is_some() {
+                        column_type
+                    } else {
+                        r.get::<String, _>(1)
+                    },
+                    nullable: r.get::<String, _>(3) == "YES",
+                    default_value: r.try_get::<Option<String>, _>(4).ok().flatten(),
+                    max_length: r.try_get::<Option<i64>, _>(5).ok().flatten(),
+                    is_primary_key: r.get::<String, _>(6) == "PRI",
+                    enum_values,
+                }
             })
             .collect();
 

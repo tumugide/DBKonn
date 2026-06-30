@@ -126,6 +126,7 @@ fn tiberius_rows_to_query_result(
             is_primary_key: false,
             default_value: None,
             max_length: None,
+            enum_values: None,
         })
         .collect();
 
@@ -275,6 +276,7 @@ impl DbConnection for MssqlDriver {
                 default_value: r.get::<&str, _>(3).map(|s| s.to_string()),
                 max_length: r.get::<i64, _>(4),
                 is_primary_key: r.get::<bool, _>(5).unwrap_or(false),
+                enum_values: None,
             })
             .collect();
 

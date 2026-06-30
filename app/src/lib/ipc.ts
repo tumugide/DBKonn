@@ -25,6 +25,7 @@ export interface ColumnInfo {
   is_primary_key: boolean;
   default_value?: string;
   max_length?: number;
+  enum_values?: string[];
 }
 
 export interface IndexInfo {

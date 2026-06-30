@@ -239,6 +239,7 @@ fn rows_to_query_result(
             is_primary_key: false,
             default_value: None,
             max_length: None,
+            enum_values: None,
         })
         .collect();
 
@@ -335,6 +336,7 @@ impl DbConnection for PgDriver {
             "SELECT
                 c.column_name,
                 c.data_type,
+                c.udt_name,
                 c.is_nullable,
                 c.column_default,
                 c.character_maximum_length,
@@ -358,15 +360,52 @@ impl DbConnection for PgDriver {
         .fetch_all(&self.pool)
         .await?;
 
+        let enum_rows = sqlx::query(
+            "SELECT c.column_name, e.enumlabel::text
+             FROM information_schema.columns c
+             JOIN pg_catalog.pg_namespace n ON n.nspname = c.udt_schema
+             JOIN pg_catalog.pg_type t
+               ON t.typname = c.udt_name
+              AND t.typnamespace = n.oid
+              AND t.typtype = 'e'
+             JOIN pg_catalog.pg_enum e ON e.enumtypid = t.oid
+             WHERE c.table_schema = $1 AND c.table_name = $2
+             ORDER BY c.column_name, e.enumsortorder",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut enum_map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for row in enum_rows {
+            let col_name: String = row.get(0);
+            let label: String = row.get(1);
+            enum_map.entry(col_name).or_default().push(label);
+        }
+
         let columns: Vec<ColumnInfo> = col_rows
             .iter()
-            .map(|r| ColumnInfo {
-                name: r.get::<String, _>(0),
-                data_type: r.get::<String, _>(1),
-                nullable: r.get::<String, _>(2) == "YES",
-                default_value: r.try_get::<Option<String>, _>(3).ok().flatten(),
-                max_length: r.try_get::<Option<i64>, _>(4).ok().flatten(),
-                is_primary_key: r.get::<bool, _>(5),
+            .map(|r| {
+                let name: String = r.get(0);
+                let data_type_raw: String = r.get(1);
+                let udt_name: String = r.get(2);
+                let enum_values = enum_map.get(&name).cloned();
+                let data_type = if enum_values.is_some() {
+                    format!("enum ({})", udt_name)
+                } else {
+                    data_type_raw
+                };
+                ColumnInfo {
+                    name,
+                    data_type,
+                    nullable: r.get::<String, _>(3) == "YES",
+                    default_value: r.try_get::<Option<String>, _>(4).ok().flatten(),
+                    max_length: r.try_get::<Option<i64>, _>(5).ok().flatten(),
+                    is_primary_key: r.get::<bool, _>(6),
+                    enum_values,
+                }
             })
             .collect();
 

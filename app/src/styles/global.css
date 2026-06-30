@@ -929,3 +929,30 @@ label {
 .record-null-check input {
     margin: 0;
 }
+
+.record-datetime-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.record-datetime-row .record-field-input {
+    flex: 1;
+    min-width: 0;
+}
+.record-now-btn {
+    flex-shrink: 0;
+    padding: 4px 8px;
+    font-size: 10px;
+}
+.record-now-btn.active {
+    background: var(--green-bright);
+    color: var(--black);
+    border-color: var(--green-bright);
+}
+
+/* Native date/time inputs — match terminal theme */
+input[type="date"],
+input[type="datetime-local"],
+input[type="time"] {
+    color-scheme: dark;
+}

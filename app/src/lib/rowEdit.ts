@@ -1,4 +1,8 @@
 import type { ColumnInfo, DbEngine, RowValue } from "./ipc";
+import {
+  sqlNowExpression,
+  SQL_NOW_SENTINEL,
+} from "./temporal";
 
 function quoteIdent(engine: DbEngine, name: string): string {
   switch (engine) {
@@ -32,6 +36,7 @@ function qualifyTable(
 }
 
 function formatSqlValue(engine: DbEngine, val: RowValue): string {
+  if (val === SQL_NOW_SENTINEL) return sqlNowExpression(engine);
   if (val === null || val === undefined) return "NULL";
   if (typeof val === "boolean") {
     if (engine === "postgres") return val ? "TRUE" : "FALSE";
