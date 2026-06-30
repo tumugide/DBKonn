@@ -1,0 +1,20 @@
+[package]
+name = "dbctl"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "dbctl"
+path = "src/main.rs"
+
+[dependencies]
+dbkonn-core = { path = "../core" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap = { version = "4", features = ["derive"] }
+dirs = "5"
+keyring = { version = "2", features = [] }

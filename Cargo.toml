@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = [
+    "core",
+    "app/src-tauri",
+    "cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["DBKonn"]
+license = "MIT"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# DB drivers
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "mysql",
+    "sqlite",
+    "json",
+    "chrono",
+    "uuid",
+    "rust_decimal",
+] }
+tiberius = { version = "0.12", default-features = false, features = [
+    "rustls",
+    "chrono",
+] }
+tokio-util = { version = "0.7", features = ["compat"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# SQL parsing
+sqlparser = "0.55"
+
+# Async trait
+async-trait = "0.1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+rust_decimal = { version = "1", features = ["db-postgres"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
