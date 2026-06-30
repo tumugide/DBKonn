@@ -1,18 +1,29 @@
+import type { ColumnInfo, DbEngine } from "../lib/ipc";
 import { compileWhereClause, newRule, OPERATORS, type FilterRule } from "../lib/filter";
 
 export class FilterBar {
   private container: HTMLElement;
   private rules: FilterRule[] = [];
-  private columns: string[] = [];
+  private columns: ColumnInfo[] = [];
+  private engine: DbEngine;
   private onChange: (where: string) => void;
 
-  constructor(container: HTMLElement, onChange: (where: string) => void) {
+  constructor(
+    container: HTMLElement,
+    onChange: (where: string) => void,
+    engine: DbEngine,
+  ) {
     this.container = container;
-    this.onChange  = onChange;
+    this.onChange = onChange;
+    this.engine = engine;
     this.render();
   }
 
-  setColumns(cols: string[]) {
+  setEngine(engine: DbEngine) {
+    this.engine = engine;
+  }
+
+  setColumns(cols: ColumnInfo[]) {
     this.columns = cols;
     this.render();
   }
@@ -36,7 +47,7 @@ export class FilterBar {
       addBtn.className = "btn btn-secondary";
       addBtn.textContent = "+ Add Filter";
       addBtn.onclick = () => {
-        const col = this.columns[0] ?? "id";
+        const col = this.columns[0]?.name ?? "id";
         this.rules.push(newRule(col));
         this.render();
       };
@@ -68,10 +79,11 @@ export class FilterBar {
       // Column selector
       const colSel = document.createElement("select");
       colSel.style.cssText = "max-width:140px;";
-      this.columns.forEach(c => {
+      this.columns.forEach((c) => {
         const opt = document.createElement("option");
-        opt.value = c; opt.textContent = c;
-        if (c === rule.column) opt.selected = true;
+        opt.value = c.name;
+        opt.textContent = c.name;
+        if (c.name === rule.column) opt.selected = true;
         colSel.appendChild(opt);
       });
       colSel.onchange = () => { rule.column = colSel.value; this.emit(); };
@@ -125,7 +137,7 @@ export class FilterBar {
     addBtn.textContent = "+";
     addBtn.title = "Add filter rule";
     addBtn.onclick = () => {
-      const col = this.columns[0] ?? "id";
+      const col = this.columns[0]?.name ?? "id";
       this.rules.push(newRule(col));
       this.render();
     };
@@ -140,6 +152,9 @@ export class FilterBar {
   }
 
   private emit() {
-    this.onChange(compileWhereClause(this.rules));
+    const columnTypes = new Map(
+      this.columns.map((c) => [c.name, c.data_type] as const),
+    );
+    this.onChange(compileWhereClause(this.rules, this.engine, columnTypes));
   }
 }

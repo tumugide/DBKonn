@@ -424,13 +424,17 @@ function renderTableView() {
   filterContainer.className = "filter-bar";
   tableMain.appendChild(filterContainer);
 
-  filterBar = new FilterBar(filterContainer, async (where) => {
-    if (!confirmDiscardIfDirty()) return;
-    clearRecordSelection();
-    const s = appState.tableState.value;
-    appState.tableState.set({ ...s, whereClause: where, page: 0 });
-    await loadTableData();
-  });
+  filterBar = new FilterBar(
+    filterContainer,
+    async (where) => {
+      if (!confirmDiscardIfDirty()) return;
+      clearRecordSelection();
+      const s = appState.tableState.value;
+      appState.tableState.set({ ...s, whereClause: where, page: 0 });
+      await loadTableData();
+    },
+    ac.config.engine,
+  );
 
   // Grid container
   const gridContainer = document.createElement("div");
@@ -569,7 +573,7 @@ function renderTableView() {
       dataGrid?.setData(rows);
       const sel = appState.selectedRecord.value;
       if (sel) dataGrid?.setSelectedRow(sel.rowIndex);
-      filterBar?.setColumns(rows.columns.map((c) => c.name));
+      filterBar?.setColumns(rows.columns);
 
       const start = s.page * s.pageSize + 1;
       const end = Math.min(start + rows.row_count - 1, total);

@@ -1,19 +1,9 @@
 import type { ColumnInfo, DbEngine, RowValue } from "./ipc";
+import { quoteIdent, quoteValue } from "./sqlQuote";
 import {
   sqlNowExpression,
   SQL_NOW_SENTINEL,
 } from "./temporal";
-
-function quoteIdent(engine: DbEngine, name: string): string {
-  switch (engine) {
-    case "mysql":
-      return `\`${name.replace(/`/g, "``")}\``;
-    case "mssql":
-      return `[${name.replace(/]/g, "]]")}]`;
-    default:
-      return `"${name.replace(/"/g, '""')}"`;
-  }
-}
 
 function qualifyTable(
   engine: DbEngine,
@@ -45,12 +35,12 @@ function formatSqlValue(engine: DbEngine, val: RowValue): string {
   if (typeof val === "number") return String(val);
   if (typeof val === "string") {
     if (val.startsWith("0x")) return val;
-    return `'${val.replace(/'/g, "''")}'`;
+    return quoteValue(val);
   }
   if (typeof val === "object") {
-    return `'${JSON.stringify(val).replace(/'/g, "''")}'`;
+    return quoteValue(JSON.stringify(val));
   }
-  return `'${String(val).replace(/'/g, "''")}'`;
+  return quoteValue(String(val));
 }
 
 function valuesEqual(a: RowValue, b: RowValue): boolean {
