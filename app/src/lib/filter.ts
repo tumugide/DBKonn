@@ -12,6 +12,8 @@ export type FilterOperator =
   | ">="
   | "LIKE"
   | "NOT LIKE"
+  | "ILIKE"
+  | "NOT ILIKE"
   | "IS NULL"
   | "IS NOT NULL"
   | "IN"
@@ -32,10 +34,19 @@ const STRING_OPS: FilterOperator[] = [
   "!=",
   "LIKE",
   "NOT LIKE",
+  "ILIKE",
+  "NOT ILIKE",
   "IN",
   "NOT IN",
 ];
 const NUMERIC_COMPARE_OPS: FilterOperator[] = ["<", "<=", ">", ">="];
+const LIKE_OPS: FilterOperator[] = ["LIKE", "NOT LIKE", "ILIKE", "NOT ILIKE"];
+
+function likePattern(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || /[%_]/.test(trimmed)) return trimmed;
+  return `%${trimmed}%`;
+}
 
 function isNumericDataType(dataType: string | undefined): boolean {
   if (!dataType) return false;
@@ -112,6 +123,19 @@ export function compileWhereClause(
         .map((v) => formatFilterValue("=", v, dataType))
         .join(", ");
       expr = `${col} ${r.operator} (${list})`;
+    } else if (LIKE_OPS.includes(r.operator)) {
+      if (!r.value.trim()) continue;
+      const pattern = quoteValue(likePattern(r.value));
+      if (r.operator === "ILIKE" || r.operator === "NOT ILIKE") {
+        if (engine === "postgres") {
+          expr = `${col} ${r.operator} ${pattern}`;
+        } else {
+          const likeOp = r.operator === "ILIKE" ? "LIKE" : "NOT LIKE";
+          expr = `LOWER(${col}) ${likeOp} LOWER(${pattern})`;
+        }
+      } else {
+        expr = `${col} ${r.operator} ${pattern}`;
+      }
     } else {
       if (!r.value.trim()) continue;
       const val = formatFilterValue(r.operator, r.value, dataType);
@@ -147,6 +171,8 @@ export const OPERATORS: FilterOperator[] = [
   ">=",
   "LIKE",
   "NOT LIKE",
+  "ILIKE",
+  "NOT ILIKE",
   "IS NULL",
   "IS NOT NULL",
   "IN",

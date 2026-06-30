@@ -1,20 +1,28 @@
 import type { ColumnInfo, DbEngine } from "../lib/ipc";
-import { compileWhereClause, newRule, OPERATORS, type FilterRule } from "../lib/filter";
+import {
+  compileWhereClause,
+  newRule,
+  OPERATORS,
+  type FilterOperator,
+  type FilterRule,
+} from "../lib/filter";
+
+const NULLARY_OPS: FilterOperator[] = ["IS NULL", "IS NOT NULL"];
 
 export class FilterBar {
   private container: HTMLElement;
   private rules: FilterRule[] = [];
   private columns: ColumnInfo[] = [];
   private engine: DbEngine;
-  private onChange: (where: string) => void;
+  private onApply: (where: string) => void;
 
   constructor(
     container: HTMLElement,
-    onChange: (where: string) => void,
+    onApply: (where: string) => void,
     engine: DbEngine,
   ) {
     this.container = container;
-    this.onChange = onChange;
+    this.onApply = onApply;
     this.engine = engine;
     this.render();
   }
@@ -24,8 +32,19 @@ export class FilterBar {
   }
 
   setColumns(cols: ColumnInfo[]) {
+    if (cols.length === 0) return;
+
+    const prevNames = new Set(this.columns.map((c) => c.name));
+    const nextNames = new Set(cols.map((c) => c.name));
+    const same =
+      prevNames.size === nextNames.size &&
+      [...nextNames].every((n) => prevNames.has(n));
+
     this.columns = cols;
-    this.render();
+    if (!same && this.rules.length > 0) {
+      this.ensureValidRules();
+      this.refreshColumnSelects();
+    }
   }
 
   setRules(rules: FilterRule[]) {
@@ -36,7 +55,15 @@ export class FilterBar {
   clear() {
     this.rules = [];
     this.render();
-    this.onChange("");
+    this.onApply("");
+  }
+
+  private ensureValidRules() {
+    for (const rule of this.rules) {
+      if (!this.columns.some((c) => c.name === rule.column) && this.columns[0]) {
+        rule.column = this.columns[0].name;
+      }
+    }
   }
 
   private render() {
@@ -55,68 +82,84 @@ export class FilterBar {
       return;
     }
 
+    this.ensureValidRules();
+
     this.rules.forEach((rule, idx) => {
       const ruleEl = document.createElement("div");
       ruleEl.className = "filter-rule";
 
-      // Conjunction (AND/OR) — shown before rule except first
       if (idx > 0) {
         const conjSel = document.createElement("select");
+        conjSel.className = "filter-conj";
         conjSel.style.cssText = "width:60px;padding:2px 4px;";
-        ["AND","OR"].forEach(v => {
+        ["AND", "OR"].forEach((v) => {
           const opt = document.createElement("option");
-          opt.value = v; opt.textContent = v;
-          if (v === this.rules[idx-1].conjunction) opt.selected = true;
+          opt.value = v;
+          opt.textContent = v;
+          if (v === this.rules[idx - 1]!.conjunction) opt.selected = true;
           conjSel.appendChild(opt);
         });
         conjSel.onchange = () => {
-          this.rules[idx-1].conjunction = conjSel.value as "AND"|"OR";
-          this.emit();
+          this.rules[idx - 1]!.conjunction = conjSel.value as "AND" | "OR";
         };
         this.container.appendChild(conjSel);
       }
 
-      // Column selector
       const colSel = document.createElement("select");
+      colSel.className = "filter-col";
       colSel.style.cssText = "max-width:140px;";
-      this.columns.forEach((c) => {
+      if (this.columns.length === 0) {
         const opt = document.createElement("option");
-        opt.value = c.name;
-        opt.textContent = c.name;
-        if (c.name === rule.column) opt.selected = true;
+        opt.value = rule.column;
+        opt.textContent = rule.column;
+        opt.selected = true;
         colSel.appendChild(opt);
-      });
-      colSel.onchange = () => { rule.column = colSel.value; this.emit(); };
+      } else {
+        this.columns.forEach((c) => {
+          const opt = document.createElement("option");
+          opt.value = c.name;
+          opt.textContent = c.name;
+          if (c.name === rule.column) opt.selected = true;
+          colSel.appendChild(opt);
+        });
+      }
+      colSel.onchange = () => {
+        rule.column = colSel.value;
+      };
       ruleEl.appendChild(colSel);
 
-      // Operator selector
       const opSel = document.createElement("select");
-      opSel.style.cssText = "width:120px;";
-      OPERATORS.forEach(op => {
+      opSel.className = "filter-op";
+      opSel.style.cssText = "width:128px;";
+      OPERATORS.forEach((op) => {
         const opt = document.createElement("option");
-        opt.value = op; opt.textContent = op;
+        opt.value = op;
+        opt.textContent = op;
         if (op === rule.operator) opt.selected = true;
         opSel.appendChild(opt);
       });
-      opSel.onchange = () => {
-        rule.operator = opSel.value as any;
-        // Show/hide value input for nullary operators
-        valueInput.style.display = ["IS NULL","IS NOT NULL"].includes(rule.operator) ? "none" : "";
-        this.emit();
-      };
-      ruleEl.appendChild(opSel);
 
-      // Value input
       const valueInput = document.createElement("input");
       valueInput.type = "text";
+      valueInput.className = "filter-value";
       valueInput.value = rule.value;
       valueInput.placeholder = "value";
       valueInput.style.cssText = "width:140px;";
-      if (["IS NULL","IS NOT NULL"].includes(rule.operator)) valueInput.style.display = "none";
-      valueInput.oninput = () => { rule.value = valueInput.value; this.emit(); };
+      if (NULLARY_OPS.includes(rule.operator)) valueInput.style.display = "none";
+
+      opSel.onchange = () => {
+        rule.operator = opSel.value as FilterOperator;
+        valueInput.style.display = NULLARY_OPS.includes(rule.operator)
+          ? "none"
+          : "";
+      };
+      ruleEl.appendChild(opSel);
+
+      valueInput.oninput = () => {
+        rule.value = valueInput.value;
+      };
       ruleEl.appendChild(valueInput);
 
-      // Remove button
       const rmBtn = document.createElement("button");
       rmBtn.className = "btn-icon";
       rmBtn.textContent = "✕";
@@ -124,14 +167,12 @@ export class FilterBar {
       rmBtn.onclick = () => {
         this.rules.splice(idx, 1);
         this.render();
-        this.emit();
       };
       ruleEl.appendChild(rmBtn);
 
       this.container.appendChild(ruleEl);
     });
 
-    // + Add button
     const addBtn = document.createElement("button");
     addBtn.className = "btn btn-secondary";
     addBtn.textContent = "+";
@@ -143,7 +184,12 @@ export class FilterBar {
     };
     this.container.appendChild(addBtn);
 
-    // Clear button
+    const applyBtn = document.createElement("button");
+    applyBtn.className = "btn btn-primary";
+    applyBtn.textContent = "[APPLY FILTER]";
+    applyBtn.onclick = () => this.apply();
+    this.container.appendChild(applyBtn);
+
     const clrBtn = document.createElement("button");
     clrBtn.className = "btn btn-secondary";
     clrBtn.textContent = "Clear";
@@ -151,10 +197,48 @@ export class FilterBar {
     this.container.appendChild(clrBtn);
   }
 
-  private emit() {
+  private syncRulesFromDom() {
+    this.container.querySelectorAll(".filter-rule").forEach((ruleEl, idx) => {
+      const rule = this.rules[idx];
+      if (!rule) return;
+
+      const colSel = ruleEl.querySelector<HTMLSelectElement>("select.filter-col");
+      const opSel = ruleEl.querySelector<HTMLSelectElement>("select.filter-op");
+      const valueInput = ruleEl.querySelector<HTMLInputElement>("input.filter-value");
+
+      if (colSel?.value) rule.column = colSel.value;
+      if (opSel) rule.operator = opSel.value as FilterOperator;
+      if (valueInput) rule.value = valueInput.value;
+    });
+  }
+
+  private apply() {
+    this.syncRulesFromDom();
     const columnTypes = new Map(
       this.columns.map((c) => [c.name, c.data_type] as const),
     );
-    this.onChange(compileWhereClause(this.rules, this.engine, columnTypes));
+    this.onApply(compileWhereClause(this.rules, this.engine, columnTypes));
+  }
+
+  private refreshColumnSelects() {
+    this.container.querySelectorAll(".filter-rule").forEach((ruleEl, idx) => {
+      const rule = this.rules[idx];
+      const colSel = ruleEl.querySelector<HTMLSelectElement>("select.filter-col");
+      if (!rule || !colSel) return;
+
+      const current = rule.column;
+      colSel.innerHTML = "";
+      this.columns.forEach((c) => {
+        const opt = document.createElement("option");
+        opt.value = c.name;
+        opt.textContent = c.name;
+        if (c.name === current) opt.selected = true;
+        colSel.appendChild(opt);
+      });
+      if (!colSel.value && this.columns[0]) {
+        rule.column = this.columns[0].name;
+        colSel.value = rule.column;
+      }
+    });
   }
 }

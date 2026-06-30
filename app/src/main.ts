@@ -436,6 +436,10 @@ function renderTableView() {
     ac.config.engine,
   );
 
+  if (appState.tableMetadata.value.length > 0) {
+    filterBar.setColumns(appState.tableMetadata.value);
+  }
+
   // Grid container
   const gridContainer = document.createElement("div");
   gridContainer.style.cssText =
@@ -573,7 +577,12 @@ function renderTableView() {
       dataGrid?.setData(rows);
       const sel = appState.selectedRecord.value;
       if (sel) dataGrid?.setSelectedRow(sel.rowIndex);
-      filterBar?.setColumns(rows.columns);
+
+      const metaCols = appState.tableMetadata.value;
+      const filterCols = rows.columns.length > 0 ? rows.columns : metaCols;
+      if (filterCols.length > 0) {
+        filterBar?.setColumns(filterCols);
+      }
 
       const start = s.page * s.pageSize + 1;
       const end = Math.min(start + rows.row_count - 1, total);

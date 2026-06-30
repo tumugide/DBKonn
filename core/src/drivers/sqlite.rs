@@ -283,7 +283,12 @@ impl DbConnection for SqliteDriver {
             table, where_str, order, page.limit, page.offset
         );
 
-        self.execute_query(&sql).await
+        let mut result = self.execute_query(&sql).await?;
+        if result.columns.is_empty() {
+            let (cols, _) = self.describe_table(None, table).await?;
+            result.columns = cols;
+        }
+        Ok(result)
     }
 
     async fn count_rows(
