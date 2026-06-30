@@ -4,6 +4,7 @@ import type {
   TableInfo,
   SchemaInfo,
   ColumnInfo,
+  RowValue,
 } from "./ipc";
 
 // ── Reactive mini-store (no framework) ───────────────────────────────────────
@@ -62,6 +63,13 @@ export interface TableState {
   columns: ColumnInfo[];
 }
 
+export interface SelectedRecord {
+  rowIndex: number;
+  original: RowValue[];
+  draft: RowValue[];
+  dirty: boolean;
+}
+
 export const appState = {
   connections: new Signal<ConnectionConfig[]>([]),
   activeConn: new Signal<ActiveConnection | null>(null),
@@ -75,6 +83,8 @@ export const appState = {
     loading: false,
     columns: [],
   }),
+  tableMetadata: new Signal<ColumnInfo[]>([]),
+  selectedRecord: new Signal<SelectedRecord | null>(null),
   sqlResult: new Signal<QueryResult | null>(null),
   sqlLoading: new Signal<boolean>(false),
   sqlError: new Signal<string | null>(null),

@@ -44,6 +44,7 @@
 
     --radius: 0px; /* No rounded corners — BIOS is sharp */
     --sidebar-width: 244px;
+    --record-panel-width: 320px;
 
     /* All monospace — authentic terminal feel */
     --font-mono:
@@ -435,6 +436,13 @@ table.data-grid td {
 table.data-grid tr:hover td {
     background: var(--bg-overlay);
 }
+table.data-grid tr.selected td {
+    background: var(--bg-selected);
+    color: var(--text-on-green);
+}
+table.data-grid tr {
+    cursor: pointer;
+}
 table.data-grid td.null-cell {
     color: var(--green-ghost);
     font-style: italic;
@@ -786,4 +794,138 @@ label {
     color: var(--green-bright);
     letter-spacing: 0.1em;
     text-transform: uppercase;
+}
+
+/* ── Table layout (grid + record panel) ──────────────────────────────────── */
+.table-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+}
+.table-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+}
+
+/* ── Record panel (right sidebar) ────────────────────────────────────────── */
+.record-panel {
+    width: 0;
+    min-width: 0;
+    overflow: hidden;
+    background: var(--black);
+    border-left: 1px solid var(--border-mid);
+    display: flex;
+    flex-direction: column;
+    transition: width 0.15s ease, min-width 0.15s ease;
+}
+.record-panel.open {
+    width: var(--record-panel-width);
+    min-width: var(--record-panel-width);
+}
+.record-panel-inner {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+.record-panel-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 16px;
+    color: var(--green-ghost);
+    font-size: 11px;
+    text-align: center;
+}
+.record-panel-hint {
+    font-size: 10px;
+    color: var(--green-dim);
+}
+.record-panel-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--bg-overlay);
+    border-bottom: 1px solid var(--border-mid);
+    flex-shrink: 0;
+}
+.record-panel-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--green-bright);
+    flex: 1;
+}
+.record-dirty-badge {
+    font-size: 10px;
+    color: var(--amber);
+    letter-spacing: 0.06em;
+}
+.record-panel-toolbar {
+    display: flex;
+    gap: 6px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--green-ghost);
+    flex-shrink: 0;
+}
+.record-panel-error {
+    margin: 4px 8px 0;
+    flex-shrink: 0;
+}
+.record-panel-fields {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 10px;
+}
+.record-field {
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--green-ghost);
+}
+.record-field-pk .record-field-name {
+    color: var(--cyan);
+}
+.record-field-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 4px;
+}
+.record-field-name {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--green-bright);
+}
+.record-field-type {
+    font-size: 9px;
+    color: var(--green-ghost);
+    text-transform: uppercase;
+}
+.record-field-input {
+    width: 100%;
+}
+.record-field-json {
+    font-size: 11px;
+    resize: vertical;
+    min-height: 48px;
+}
+.record-null-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+    font-size: 10px;
+    color: var(--green-dim);
+    cursor: pointer;
+}
+.record-null-check input {
+    margin: 0;
 }

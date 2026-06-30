@@ -10,8 +10,10 @@ const BUFFER = 10; // rows to render above/below viewport
 export interface GridOptions {
   container: HTMLElement;
   onHeaderClick?: (colName: string, idx: number) => void;
+  onRowClick?: (row: RowValue[], rowIndex: number) => void;
   sortCol?: string;
   sortDesc?: boolean;
+  selectedRowIndex?: number;
 }
 
 export class DataGrid {
@@ -67,6 +69,11 @@ export class DataGrid {
     this.opts.sortCol = col;
     this.opts.sortDesc = desc;
     this.renderHeaders();
+  }
+
+  setSelectedRow(rowIndex?: number) {
+    this.opts.selectedRowIndex = rowIndex;
+    this.scheduleRender();
   }
 
   private renderHeaders() {
@@ -140,8 +147,12 @@ export class DataGrid {
     this.tbody.appendChild(fragment);
   }
 
-  private buildRow(row: RowValue[], _idx: number): HTMLTableRowElement {
+  private buildRow(row: RowValue[], idx: number): HTMLTableRowElement {
     const tr = document.createElement("tr");
+    if (idx === this.opts.selectedRowIndex) {
+      tr.classList.add("selected");
+    }
+    tr.addEventListener("click", () => this.opts.onRowClick?.(row, idx));
     row.forEach((val) => {
       const td = document.createElement("td");
       const { text, cls } = formatCell(val);

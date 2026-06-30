@@ -4,7 +4,10 @@ import { appState, type MainView } from "./lib/store";
 import { DataGrid } from "./components/DataGrid";
 import { FilterBar } from "./components/FilterBar";
 import { SqlEditor } from "./components/SqlEditor";
+import { RecordPanel } from "./components/RecordPanel";
 import { showConnectionModal } from "./components/ConnectionModal";
+import { cloneRowValue } from "./lib/rowEdit";
+import type { RowValue } from "./lib/ipc";
 
 // ── App Shell ─────────────────────────────────────────────────────────────────
 
@@ -278,6 +281,29 @@ async function disconnectFromDb() {
 let sqlEditor: SqlEditor | null = null;
 let dataGrid: DataGrid | null = null;
 let filterBar: FilterBar | null = null;
+let recordPanel: RecordPanel | null = null;
+
+function confirmDiscardIfDirty(): boolean {
+  const rec = appState.selectedRecord.value;
+  if (rec?.dirty) {
+    return confirm("Discard unsaved changes?");
+  }
+  return true;
+}
+
+function clearRecordSelection() {
+  appState.selectedRecord.set(null);
+  dataGrid?.setSelectedRow(undefined);
+  recordPanel?.clear();
+  document.getElementById("record-panel")?.classList.remove("open");
+}
+
+function schemaForEngine(): string | undefined {
+  const ac = appState.activeConn.value;
+  if (!ac) return undefined;
+  if (ac.config.engine === "mysql") return ac.selectedDatabase;
+  return ac.selectedSchema;
+}
 
 function renderMainView(view: MainView) {
   mainContent.innerHTML = "";
@@ -346,6 +372,25 @@ function renderTableView() {
   }
 
   const ts = appState.tableState.value;
+  const selected = appState.selectedRecord.value;
+
+  mainContent.innerHTML = "";
+  mainContent.style.cssText =
+    "flex:1;overflow:hidden;display:flex;flex-direction:column;";
+
+  const tableLayout = document.createElement("div");
+  tableLayout.className = "table-layout";
+  mainContent.appendChild(tableLayout);
+
+  const tableMain = document.createElement("div");
+  tableMain.className = "table-main";
+  tableLayout.appendChild(tableMain);
+
+  const recordPanelEl = document.createElement("aside");
+  recordPanelEl.className = "record-panel";
+  recordPanelEl.id = "record-panel";
+  if (selected) recordPanelEl.classList.add("open");
+  tableLayout.appendChild(recordPanelEl);
 
   // Toolbar
   const toolbar = document.createElement("div");
@@ -354,7 +399,11 @@ function renderTableView() {
   const refreshBtn = document.createElement("button");
   refreshBtn.className = "btn btn-secondary";
   refreshBtn.textContent = "[F5] REFRESH";
-  refreshBtn.onclick = () => loadTableData();
+  refreshBtn.onclick = () => {
+    if (!confirmDiscardIfDirty()) return;
+    clearRecordSelection();
+    void loadTableData();
+  };
 
   const exportBtn = document.createElement("button");
   exportBtn.className = "btn btn-secondary";
@@ -368,14 +417,16 @@ function renderTableView() {
   toolbar.appendChild(refreshBtn);
   toolbar.appendChild(exportBtn);
   toolbar.appendChild(rowInfo);
-  mainContent.appendChild(toolbar);
+  tableMain.appendChild(toolbar);
 
   // Filter bar
   const filterContainer = document.createElement("div");
   filterContainer.className = "filter-bar";
-  mainContent.appendChild(filterContainer);
+  tableMain.appendChild(filterContainer);
 
   filterBar = new FilterBar(filterContainer, async (where) => {
+    if (!confirmDiscardIfDirty()) return;
+    clearRecordSelection();
     const s = appState.tableState.value;
     appState.tableState.set({ ...s, whereClause: where, page: 0 });
     await loadTableData();
@@ -385,28 +436,95 @@ function renderTableView() {
   const gridContainer = document.createElement("div");
   gridContainer.style.cssText =
     "flex:1;overflow:hidden;display:flex;flex-direction:column;";
-  mainContent.appendChild(gridContainer);
+  tableMain.appendChild(gridContainer);
 
   dataGrid = new DataGrid({
     container: gridContainer,
     sortCol: ts.orderBy,
     sortDesc: ts.orderDesc,
+    selectedRowIndex: selected?.rowIndex,
     onHeaderClick: async (col) => {
+      if (!confirmDiscardIfDirty()) return;
+      clearRecordSelection();
       const s = appState.tableState.value;
       const desc = s.orderBy === col ? !s.orderDesc : false;
       appState.tableState.set({ ...s, orderBy: col, orderDesc: desc, page: 0 });
       dataGrid?.updateSort(col, desc);
       await loadTableData();
     },
+    onRowClick: (row, rowIndex) => selectRecord(row, rowIndex),
   });
+
+  // Record panel
+  recordPanel = new RecordPanel({
+    container: recordPanelEl,
+    engine: ac.config.engine,
+    schema: schemaForEngine(),
+    database: ac.selectedDatabase ?? ac.config.database,
+    table: ac.selectedTable,
+    onCommit: async (sql) => {
+      const ac2 = appState.activeConn.value;
+      if (!ac2) return;
+      const result = await ipc.executeQuery(ac2.connId, sql);
+      if (result.error) throw new Error(result.error);
+      appState.status.set(
+        `UPDATED ${result.affected_rows ?? 1} ROW(S) | ${result.execution_time_ms}ms`,
+      );
+      const rec = appState.selectedRecord.value;
+      if (rec) {
+        const newOriginal = rec.draft.map((v) => cloneRowValue(v));
+        const updated = { ...rec, original: newOriginal, dirty: false };
+        appState.selectedRecord.set(updated);
+        recordPanel?.show(updated);
+      }
+      await loadTableData();
+    },
+    onClose: () => clearRecordSelection(),
+  });
+  recordPanel.setColumns(appState.tableMetadata.value);
+  if (selected) recordPanel.show(selected);
+
+  void loadTableMetadata();
 
   // Pagination
   const pagination = document.createElement("div");
   pagination.className = "pagination";
   pagination.id = "pagination";
-  mainContent.appendChild(pagination);
+  tableMain.appendChild(pagination);
 
   loadTableData();
+
+  function selectRecord(row: RowValue[], rowIndex: number) {
+    if (!confirmDiscardIfDirty()) return;
+
+    const original = row.map((v) => cloneRowValue(v));
+    const record = {
+      rowIndex,
+      original,
+      draft: original.map((v) => cloneRowValue(v)),
+      dirty: false,
+    };
+    appState.selectedRecord.set(record);
+    dataGrid?.setSelectedRow(rowIndex);
+    recordPanelEl.classList.add("open");
+    recordPanel?.show(record);
+  }
+
+  async function loadTableMetadata() {
+    const ac2 = appState.activeConn.value;
+    if (!ac2?.selectedTable) return;
+    try {
+      const [columns] = await ipc.describeTable(
+        ac2.connId,
+        schemaForEngine(),
+        ac2.selectedTable,
+      );
+      appState.tableMetadata.set(columns);
+      recordPanel?.setColumns(columns);
+    } catch (e) {
+      console.warn("Failed to load table metadata:", e);
+    }
+  }
 
   // ── Load table data ─────────────────────────────────────────────────────
   async function loadTableData() {
@@ -420,7 +538,7 @@ function renderTableView() {
       const [rows, total] = await Promise.all([
         ipc.fetchTableRows(
           ac2.connId,
-          ac2.selectedSchema,
+          schemaForEngine(),
           ac2.selectedTable,
           {
             limit: s.pageSize,
@@ -432,7 +550,7 @@ function renderTableView() {
         ),
         ipc.countRows(
           ac2.connId,
-          ac2.selectedSchema,
+          schemaForEngine(),
           ac2.selectedTable,
           s.whereClause || undefined,
         ),
@@ -449,6 +567,8 @@ function renderTableView() {
         loading: false,
       });
       dataGrid?.setData(rows);
+      const sel = appState.selectedRecord.value;
+      if (sel) dataGrid?.setSelectedRow(sel.rowIndex);
       filterBar?.setColumns(rows.columns.map((c) => c.name));
 
       const start = s.page * s.pageSize + 1;
@@ -533,6 +653,8 @@ function renderPagination(
 }
 
 function changePage(newPage: number) {
+  if (!confirmDiscardIfDirty()) return;
+  clearRecordSelection();
   const s = appState.tableState.value;
   appState.tableState.set({ ...s, page: newPage });
   renderMainView("table");
@@ -694,6 +816,8 @@ function selectTable(tableName: string, schema?: string) {
     columns: [],
     orderBy: undefined,
   });
+  appState.tableMetadata.set([]);
+  appState.selectedRecord.set(null);
 
   // Re-render sidebar to highlight selected table
   renderSidebar();
