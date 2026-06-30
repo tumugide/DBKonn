@@ -1,0 +1,789 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   DBKonn — 70s BIOS / Terminal Green Phosphor Theme
+   Inspired by VT100, IBM 3270, and dBASE III aesthetics.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+    /* Palette — Phosphor P31 green on black */
+    --green-bright: #33ff33;
+    --green-mid: #00cc00;
+    --green-dim: #007700;
+    --green-ghost: #003300;
+    --green-selected: #00aa00;
+
+    --white: #ffffff;
+    --cyan: #00ffff;
+    --yellow: #ffff00;
+    --amber: #ff8800;
+    --red: #ff4400;
+    --black: #000000;
+
+    /* Semantic aliases */
+    --bg-base: var(--black);
+    --bg-surface: #000000;
+    --bg-overlay: #001200;
+    --bg-hover: #002200;
+    --bg-selected: var(--green-selected);
+
+    --text-primary: var(--green-bright);
+    --text-secondary: var(--green-mid);
+    --text-muted: var(--green-dim);
+    --text-on-green: var(--black);
+
+    --accent-blue: var(--cyan);
+    --accent-green: var(--green-bright);
+    --accent-red: var(--red);
+    --accent-yellow: var(--yellow);
+    --accent-mauve: var(--cyan);
+    --accent-white: var(--white);
+
+    --border: var(--green-ghost);
+    --border-mid: var(--green-dim);
+    --border-bright: var(--green-mid);
+    --border-accent: var(--green-bright);
+
+    --radius: 0px; /* No rounded corners — BIOS is sharp */
+    --sidebar-width: 244px;
+
+    /* All monospace — authentic terminal feel */
+    --font-mono:
+        "JetBrains Mono", "Fira Code", "Lucida Console", "Courier New",
+        monospace;
+    --font-sans:
+        "JetBrains Mono", "Fira Code", "Lucida Console", "Courier New",
+        monospace;
+}
+
+/* ── Reset ───────────────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+html,
+body {
+    height: 100%;
+    overflow: hidden;
+}
+
+body {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    background: var(--black);
+    color: var(--green-bright);
+    -webkit-font-smoothing: antialiased;
+}
+
+/* CRT phosphor scanline overlay */
+body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.04) 0px,
+        rgba(0, 0, 0, 0.04) 1px,
+        transparent 1px,
+        transparent 2px
+    );
+    pointer-events: none;
+    z-index: 9999;
+}
+
+#app {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: var(--black);
+}
+::-webkit-scrollbar-thumb {
+    background: var(--green-dim);
+}
+::-webkit-scrollbar-thumb:hover {
+    background: var(--green-mid);
+}
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+.app-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+.sidebar {
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    background: var(--black);
+    border-right: 1px solid var(--border-mid);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.main-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* ── Titlebar ────────────────────────────────────────────────────────────── */
+.titlebar {
+    height: 28px;
+    background: var(--green-bright);
+    color: var(--black);
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    -webkit-app-region: drag;
+    user-select: none;
+    gap: 8px;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+.titlebar .title {
+    -webkit-app-region: no-drag;
+    letter-spacing: 0.15em;
+}
+.window-controls {
+    width: 68px;
+    min-width: 68px;
+}
+
+/* ── Sidebar header bar ──────────────────────────────────────────────────── */
+.sidebar-header {
+    padding: 5px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--black);
+    background: var(--green-mid);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--green-dim);
+}
+
+/* Connected header — green on green, highlighted */
+.sidebar-header.connected {
+    background: var(--green-bright);
+}
+
+/* ── Icon buttons ────────────────────────────────────────────────────────── */
+.btn-icon {
+    background: none;
+    border: 1px solid currentColor;
+    color: var(--black);
+    cursor: pointer;
+    padding: 1px 5px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    line-height: 1;
+}
+.btn-icon:hover {
+    background: var(--black);
+    color: var(--green-bright);
+    border-color: var(--green-bright);
+}
+.btn-icon.danger:hover {
+    background: var(--red);
+    color: var(--black);
+    border-color: var(--red);
+}
+
+/* ── Sidebar DB/Schema selectors ─────────────────────────────────────────── */
+.db-controls {
+    border-bottom: 1px solid var(--border-mid);
+    padding: 0;
+}
+.db-control-row {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--green-ghost);
+    padding: 0 8px;
+    gap: 6px;
+    height: 26px;
+}
+.db-control-row label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--green-dim);
+    white-space: nowrap;
+    min-width: 54px;
+    margin: 0;
+    display: block;
+}
+.db-control-row select {
+    flex: 1;
+    background: var(--black);
+    color: var(--green-bright);
+    border: none;
+    border-left: 1px solid var(--green-ghost);
+    padding: 2px 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    outline: none;
+    cursor: pointer;
+    min-width: 0;
+}
+.db-control-row select:focus {
+    border-left-color: var(--green-bright);
+}
+
+/* ── Connection list ─────────────────────────────────────────────────────── */
+.conn-list {
+    flex: 1;
+    overflow-y: auto;
+}
+.conn-item {
+    padding: 5px 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--green-mid);
+    border-bottom: 1px solid var(--green-ghost);
+    font-size: 11px;
+}
+.conn-item:hover {
+    background: var(--bg-overlay);
+    color: var(--green-bright);
+}
+.conn-item.active {
+    background: var(--bg-overlay);
+    color: var(--green-bright);
+}
+.conn-engine {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border: 1px solid var(--green-dim);
+    color: var(--green-dim);
+    white-space: nowrap;
+}
+.conn-item.active .conn-engine,
+.conn-item:hover .conn-engine {
+    border-color: var(--green-mid);
+    color: var(--green-mid);
+}
+
+/* ── Table tree ──────────────────────────────────────────────────────────── */
+.tree-header {
+    padding: 4px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--green-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    background: var(--green-ghost);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.tree-item {
+    padding: 4px 8px 4px 16px;
+    cursor: pointer;
+    color: var(--green-mid);
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    border-bottom: 1px solid var(--green-ghost);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.tree-item::before {
+    content: "> ";
+    color: var(--green-ghost);
+}
+.tree-item:hover {
+    background: var(--bg-overlay);
+    color: var(--green-bright);
+}
+.tree-item:hover::before {
+    color: var(--green-mid);
+}
+.tree-item.active {
+    color: var(--green-bright);
+    background: var(--bg-overlay);
+}
+.tree-item.active::before {
+    content: ">> ";
+    color: var(--green-bright);
+}
+
+/* ── Main content tabs ───────────────────────────────────────────────────── */
+.tab-bar {
+    display: flex;
+    background: var(--black);
+    border-bottom: 1px solid var(--border-mid);
+    padding: 0;
+    gap: 0;
+}
+.tab {
+    padding: 5px 14px;
+    cursor: pointer;
+    color: var(--green-dim);
+    font-size: 11px;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border-right: 1px solid var(--green-ghost);
+    border-bottom: 2px solid transparent;
+}
+.tab:hover {
+    color: var(--green-bright);
+    background: var(--bg-overlay);
+}
+.tab.active {
+    color: var(--black);
+    background: var(--green-bright);
+    border-bottom-color: var(--green-bright);
+}
+
+/* ── Data grid ───────────────────────────────────────────────────────────── */
+.grid-container {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.grid-toolbar {
+    padding: 4px 8px;
+    background: var(--black);
+    border-bottom: 1px solid var(--border-mid);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.grid-scroll {
+    flex: 1;
+    overflow: auto;
+}
+
+table.data-grid {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    table-layout: fixed;
+}
+
+table.data-grid th {
+    position: sticky;
+    top: 0;
+    background: var(--green-mid);
+    color: var(--black);
+    border-right: 1px solid var(--green-dim);
+    border-bottom: 2px solid var(--green-bright);
+    padding: 4px 8px;
+    text-align: left;
+    font-weight: 700;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: none;
+    z-index: 1;
+}
+table.data-grid th:hover {
+    background: var(--green-bright);
+}
+table.data-grid th.sort-asc::after {
+    content: " /\\";
+}
+table.data-grid th.sort-desc::after {
+    content: " \\/";
+}
+
+table.data-grid td {
+    border-right: 1px solid var(--green-ghost);
+    border-bottom: 1px solid var(--green-ghost);
+    padding: 3px 8px;
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--green-bright);
+}
+table.data-grid tr:hover td {
+    background: var(--bg-overlay);
+}
+table.data-grid td.null-cell {
+    color: var(--green-ghost);
+    font-style: italic;
+}
+table.data-grid td.binary-cell {
+    color: var(--green-dim);
+}
+table.data-grid td.num-cell {
+    color: var(--cyan);
+}
+table.data-grid td.bool-true {
+    color: var(--green-bright);
+    font-weight: 700;
+}
+table.data-grid td.bool-false {
+    color: var(--green-dim);
+}
+table.data-grid td.json-cell {
+    color: var(--yellow);
+}
+
+/* ── Pagination ──────────────────────────────────────────────────────────── */
+.pagination {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    background: var(--black);
+    border-top: 1px solid var(--border-mid);
+    font-size: 11px;
+    color: var(--green-dim);
+}
+.pagination .page-info {
+    flex: 1;
+}
+
+/* ── SQL Editor ──────────────────────────────────────────────────────────── */
+.editor-toolbar {
+    padding: 4px 8px;
+    background: var(--black);
+    border-bottom: 1px solid var(--border-mid);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* CodeMirror overrides for BIOS theme */
+.cm-editor {
+    height: 100%;
+    font-size: 13px;
+    font-family: var(--font-mono) !important;
+    background: var(--black) !important;
+}
+.cm-scroller {
+    overflow: auto !important;
+}
+.cm-content {
+    caret-color: var(--green-bright) !important;
+}
+.cm-line {
+    color: var(--green-bright);
+}
+.cm-gutters {
+    background: var(--black) !important;
+    border-right: 1px solid var(--green-ghost) !important;
+    color: var(--green-ghost) !important;
+}
+.cm-activeLineGutter {
+    background: var(--bg-overlay) !important;
+    color: var(--green-mid) !important;
+}
+.cm-activeLine {
+    background: var(--bg-overlay) !important;
+}
+.cm-cursor {
+    border-left-color: var(--green-bright) !important;
+}
+.cm-selectionBackground {
+    background: var(--green-selected) !important;
+    opacity: 0.5;
+}
+.cm-tooltip {
+    background: var(--black) !important;
+    border: 1px solid var(--green-mid) !important;
+    color: var(--green-bright) !important;
+}
+.cm-tooltip-autocomplete ul li[aria-selected] {
+    background: var(--green-selected) !important;
+    color: var(--black) !important;
+}
+
+/* ── Filter builder ──────────────────────────────────────────────────────── */
+.filter-bar {
+    padding: 5px 8px;
+    background: var(--bg-overlay);
+    border-bottom: 1px solid var(--border-mid);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    min-height: 34px;
+}
+.filter-rule {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    border: 1px solid var(--green-dim);
+    padding: 2px 6px;
+    background: var(--black);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+.btn {
+    padding: 4px 12px;
+    border: 1px solid var(--green-mid);
+    cursor: pointer;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: transparent;
+    color: var(--green-bright);
+    border-radius: 0;
+}
+.btn-primary {
+    background: var(--green-bright);
+    color: var(--black);
+    border-color: var(--green-bright);
+}
+.btn-primary:hover {
+    background: var(--white);
+    border-color: var(--white);
+    color: var(--black);
+}
+
+.btn-secondary {
+    border-color: var(--green-dim);
+    color: var(--green-mid);
+}
+.btn-secondary:hover {
+    background: var(--green-mid);
+    color: var(--black);
+}
+
+.btn-danger {
+    border-color: var(--red);
+    color: var(--red);
+}
+.btn-danger:hover {
+    background: var(--red);
+    color: var(--black);
+}
+
+/* ── Form inputs ─────────────────────────────────────────────────────────── */
+input,
+select,
+textarea {
+    background: var(--black);
+    color: var(--green-bright);
+    border: 1px solid var(--green-dim);
+    border-radius: 0;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    outline: none;
+}
+input:focus,
+select:focus,
+textarea:focus {
+    border-color: var(--green-bright);
+}
+input::placeholder {
+    color: var(--green-ghost);
+}
+label {
+    font-size: 11px;
+    color: var(--green-dim);
+    display: block;
+    margin-bottom: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+/* ── Modal ───────────────────────────────────────────────────────────────── */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+.modal {
+    background: var(--black);
+    border: 2px solid var(--green-bright);
+    padding: 0;
+    min-width: 440px;
+    max-width: 560px;
+    width: 100%;
+    box-shadow: 0 0 40px rgba(51, 255, 51, 0.25);
+}
+.modal-title {
+    font-size: 12px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    background: var(--green-bright);
+    color: var(--black);
+    padding: 6px 14px;
+    margin-bottom: 0;
+}
+.modal-body {
+    padding: 18px 18px 0;
+}
+.form-row {
+    margin-bottom: 12px;
+}
+.form-row-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-top: 18px;
+    padding: 10px 18px;
+    border-top: 1px solid var(--green-ghost);
+    background: var(--bg-overlay);
+}
+
+/* ── Status bar ──────────────────────────────────────────────────────────── */
+.status-bar {
+    padding: 2px 8px;
+    font-size: 11px;
+    color: var(--green-dim);
+    background: var(--black);
+    border-top: 1px solid var(--green-ghost);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    letter-spacing: 0.05em;
+}
+.status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--green-ghost);
+    flex-shrink: 0;
+}
+.status-dot.connected {
+    background: var(--green-bright);
+    box-shadow: 0 0 6px var(--green-bright);
+}
+.status-dot.error {
+    background: var(--red);
+}
+
+/* ── Empty / placeholder states ──────────────────────────────────────────── */
+.empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--green-ghost);
+    font-family: var(--font-mono);
+}
+.empty-state h2 {
+    font-size: 14px;
+    color: var(--green-dim);
+    letter-spacing: 0.1em;
+}
+.empty-state p {
+    font-size: 12px;
+}
+.empty-state pre {
+    color: var(--green-ghost);
+    font-size: 11px;
+    line-height: 1.6;
+    text-align: center;
+}
+
+/* ── Error banner ────────────────────────────────────────────────────────── */
+.error-banner {
+    background: rgba(255, 68, 0, 0.08);
+    border: 1px solid var(--red);
+    color: var(--amber);
+    padding: 6px 10px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 4px 8px;
+}
+
+/* ── Connection card (connections view) ──────────────────────────────────── */
+.conn-card {
+    background: var(--black);
+    border: 1px solid var(--green-dim);
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 6px;
+}
+.conn-card:hover {
+    border-color: var(--green-bright);
+}
+.conn-card-info {
+    flex: 1;
+    min-width: 0;
+}
+.conn-card-name {
+    font-weight: 700;
+    color: var(--green-bright);
+    font-size: 12px;
+    letter-spacing: 0.05em;
+}
+.conn-card-detail {
+    font-size: 11px;
+    color: var(--green-dim);
+    margin-top: 2px;
+}
+.conn-card-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+/* ── Section heading (connections page) ──────────────────────────────────── */
+.section-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--green-dim);
+}
+.section-heading h2 {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--green-bright);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}

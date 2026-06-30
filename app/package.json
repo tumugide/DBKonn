@@ -1,0 +1,30 @@
+{
+  "name": "dbkonn-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6",
+    "@codemirror/commands": "^6",
+    "@codemirror/lang-sql": "^6",
+    "@codemirror/language": "^6",
+    "@codemirror/state": "^6",
+    "@codemirror/theme-one-dark": "^6",
+    "@codemirror/view": "^6",
+    "@lezer/highlight": "^1.2.3",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-fs": "^2",
+    "@tauri-apps/plugin-shell": "^2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "typescript": "^5",
+    "vite": "^6"
+  }
+}
