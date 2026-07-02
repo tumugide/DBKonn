@@ -34,6 +34,25 @@ export class Signal<T> {
   }
 }
 
+// ── Theme ─────────────────────────────────────────────────────────────────────
+
+export type ThemeType = "bios" | "monokai" | "dark" | "light" | "catppuccin" | "ayu-dark" | "ayu-light";
+
+export interface ThemeMeta {
+  label: string;
+  icon: string;
+}
+
+export const THEMES: Record<ThemeType, ThemeMeta> = {
+  bios:       { label: "BIOS",        icon: "\u25CF" },
+  monokai:    { label: "MONOKAI",     icon: "\u25CF" },
+  dark:       { label: "DARK",        icon: "\u25CF" },
+  light:      { label: "LIGHT",       icon: "\u25CB" },
+  catppuccin: { label: "CATPPUCCIN",  icon: "\u25CF" },
+  "ayu-dark": { label: "AYU DARK",    icon: "\u25CF" },
+  "ayu-light":{ label: "AYU LIGHT",   icon: "\u25CB" },
+};
+
 // ── App State ─────────────────────────────────────────────────────────────────
 
 export type MainView = "table" | "sql" | "connections";
@@ -71,6 +90,7 @@ export interface SelectedRecord {
 }
 
 export const appState = {
+  theme: new Signal<ThemeType>("bios"),
   connections: new Signal<ConnectionConfig[]>([]),
   activeConn: new Signal<ActiveConnection | null>(null),
   mainView: new Signal<MainView>("connections"),

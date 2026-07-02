@@ -1,6 +1,6 @@
 import "./styles/global.css";
 import { ipc, type ConnectionConfig, type ColumnInfo } from "./lib/ipc";
-import { appState, type MainView } from "./lib/store";
+import { appState, type MainView, type ThemeType, THEMES } from "./lib/store";
 import { DataGrid } from "./components/DataGrid";
 import { FilterBar } from "./components/FilterBar";
 import { SqlEditor } from "./components/SqlEditor";
@@ -8,6 +8,72 @@ import { RecordPanel } from "./components/RecordPanel";
 import { showConnectionModal } from "./components/ConnectionModal";
 import { cloneRowValue } from "./lib/rowEdit";
 import type { RowValue } from "./lib/ipc";
+
+// ── Theme application ─────────────────────────────────────────────────────────
+
+function applyTheme(theme: ThemeType) {
+  document.documentElement.setAttribute("data-theme", theme);
+  localStorage.setItem("dbkonn-theme", theme);
+  const el = document.getElementById("theme-label");
+  if (el) el.textContent = THEMES[theme].label;
+}
+
+function loadSavedTheme(): ThemeType {
+  const saved = localStorage.getItem("dbkonn-theme") as ThemeType | null;
+  if (saved && THEMES[saved]) return saved;
+  return "bios";
+}
+
+// ── Appearance modal ──────────────────────────────────────────────────────────
+
+function showAppearanceModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+
+  const currentTheme = appState.theme.value;
+  const themeKeys = Object.keys(THEMES) as ThemeType[];
+
+  overlay.innerHTML = `
+    <div class="modal">
+      <div class="modal-title">[ APPEARANCE ]</div>
+      <div class="modal-body">
+        <p style="font-size:11px;color:var(--text-muted);margin-bottom:12px;letter-spacing:0.05em;">
+          SELECT THEME
+        </p>
+        <div class="theme-grid">
+          ${themeKeys.map((key) => {
+            const meta = THEMES[key];
+            const active = key === currentTheme ? " active" : "";
+            return `<button class="theme-option${active}" data-theme-key="${key}">
+              <span class="dot" style="background:var(--accent)"></span>
+              ${meta.label}
+              ${active ? '<span class="current-badge">CURRENT</span>' : ""}
+            </button>`;
+          }).join("")}
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="am-close">CLOSE</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  overlay.querySelectorAll(".theme-option").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = (btn as HTMLElement).dataset["themeKey"] as ThemeType;
+      if (key === appState.theme.value) return;
+      overlay.remove();
+      appState.theme.set(key);
+    });
+  });
+
+  overlay.querySelector("#am-close")!.addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+}
 
 // ── App Shell ─────────────────────────────────────────────────────────────────
 
@@ -17,6 +83,7 @@ app.innerHTML = `
   <div class="titlebar">
     <div class="window-controls"></div>
     <span class="title">&gt;&gt; DBKONN v0.1</span>
+    <button class="btn-icon" id="btn-appearance" title="Appearance settings" style="margin-left:auto;border:none;font-size:12px;">[THEME]</button>
   </div>
   <div class="app-layout">
     <aside class="sidebar" id="sidebar"></aside>
@@ -32,7 +99,8 @@ app.innerHTML = `
   <div class="status-bar">
     <div class="status-dot" id="status-dot"></div>
     <span id="status-text">READY</span>
-    <span style="margin-left:auto;color:var(--green-ghost)">DBKonn © 2025</span>
+    <span id="theme-label" style="margin-left:auto;cursor:pointer;color:var(--text-muted);letter-spacing:0.06em;font-weight:700;" title="Click to change theme"></span>
+    <span style="margin-left:8px;color:var(--text-faint)">DBKonn © 2025</span>
   </div>
 `;
 
@@ -41,10 +109,20 @@ const sidebarEl = document.getElementById("sidebar")!;
 const mainContent = document.getElementById("main-content")!;
 const statusText = document.getElementById("status-text")!;
 const statusDot = document.getElementById("status-dot")!;
+const themeLabel = document.getElementById("theme-label")!;
 
 appState.status.subscribe((s) => {
   statusText.textContent = s.toUpperCase();
 });
+
+// ── Theme: apply on boot, listen for changes ──────────────────────────────────
+const savedTheme = loadSavedTheme();
+appState.theme.set(savedTheme);
+applyTheme(savedTheme);
+appState.theme.subscribe(applyTheme);
+
+document.getElementById("btn-appearance")!.addEventListener("click", showAppearanceModal);
+themeLabel.addEventListener("click", showAppearanceModal);
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 document.querySelectorAll(".tab").forEach((tab) => {
@@ -173,7 +251,7 @@ function renderConnList() {
 
   listEl.innerHTML = "";
   if (conns.length === 0) {
-    listEl.innerHTML = `<div style="padding:12px 8px;color:var(--green-ghost);font-size:11px;">
+    listEl.innerHTML = `<div style="padding:12px 8px;color:var(--text-faint);font-size:11px;">
       No connections.<br>Press [+] to add one.
     </div>`;
     return;
@@ -412,7 +490,7 @@ function renderTableView() {
 
   const rowInfo = document.createElement("span");
   rowInfo.id = "row-info";
-  rowInfo.style.cssText = "font-size:11px;color:var(--green-dim);flex:1;";
+  rowInfo.style.cssText = "font-size:11px;color:var(--text-muted);flex:1;";
 
   toolbar.appendChild(refreshBtn);
   toolbar.appendChild(exportBtn);
@@ -656,7 +734,7 @@ function renderPagination(
   next.onclick = () => changePage(page + 1);
 
   const pageSizeEl = document.createElement("span");
-  pageSizeEl.style.cssText = "font-size:11px;color:var(--green-ghost);";
+  pageSizeEl.style.cssText = "font-size:11px;color:var(--text-faint);";
   pageSizeEl.textContent = `${pageSize}/PAGE`;
 
   el.appendChild(prev);
@@ -698,7 +776,7 @@ function renderConnectionsView() {
     const empty = document.createElement("div");
     empty.className = "empty-state";
     empty.style.marginTop = "40px";
-    empty.innerHTML = `<p style="color:var(--green-ghost)">NO CONNECTIONS CONFIGURED.</p>`;
+    empty.innerHTML = `<p style="color:var(--text-faint)">NO CONNECTIONS CONFIGURED.</p>`;
     mainContent.appendChild(empty);
     return;
   }

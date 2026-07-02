@@ -1,58 +1,274 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   DBKonn — 70s BIOS / Terminal Green Phosphor Theme
-   Inspired by VT100, IBM 3270, and dBASE III aesthetics.
+   DBKonn — Multi-theme appearance system
+   Themes: bios, monokai, dark, light, catppuccin, ayu-dark, ayu-light
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
-    /* Palette — Phosphor P31 green on black */
-    --green-bright: #33ff33;
-    --green-mid: #00cc00;
-    --green-dim: #007700;
-    --green-ghost: #003300;
-    --green-selected: #00aa00;
-
-    --white: #ffffff;
-    --cyan: #00ffff;
-    --yellow: #ffff00;
-    --amber: #ff8800;
-    --red: #ff4400;
-    --black: #000000;
-
-    /* Semantic aliases */
-    --bg-base: var(--black);
-    --bg-surface: #000000;
-    --bg-overlay: #001200;
-    --bg-hover: #002200;
-    --bg-selected: var(--green-selected);
-
-    --text-primary: var(--green-bright);
-    --text-secondary: var(--green-mid);
-    --text-muted: var(--green-dim);
-    --text-on-green: var(--black);
-
-    --accent-blue: var(--cyan);
-    --accent-green: var(--green-bright);
-    --accent-red: var(--red);
-    --accent-yellow: var(--yellow);
-    --accent-mauve: var(--cyan);
-    --accent-white: var(--white);
-
-    --border: var(--green-ghost);
-    --border-mid: var(--green-dim);
-    --border-bright: var(--green-mid);
-    --border-accent: var(--green-bright);
-
-    --radius: 0px; /* No rounded corners — BIOS is sharp */
-    --sidebar-width: 244px;
-    --record-panel-width: 320px;
-
-    /* All monospace — authentic terminal feel */
+    /* Font stacks */
     --font-mono:
         "JetBrains Mono", "Fira Code", "Lucida Console", "Courier New",
         monospace;
     --font-sans:
-        "JetBrains Mono", "Fira Code", "Lucida Console", "Courier New",
-        monospace;
+        "Inter", "SF Pro", "Helvetica Neue", "Segoe UI", "Arial", sans-serif;
+
+    /* Layout */
+    --sidebar-width: 244px;
+    --record-panel-width: 320px;
+
+    /* Scanline — only shown for bios */
+    --scanline-display: none;
+}
+
+/* ── BIOS / Green Phosphor ──────────────────────────────────────────────────── */
+[data-theme="bios"] {
+    --bg-base: #000000;
+    --bg-surface: #000000;
+    --bg-overlay: #001200;
+    --bg-hover: #002200;
+    --bg-selected: #00aa00;
+    --text-primary: #33ff33;
+    --text-secondary: #00cc00;
+    --text-muted: #007700;
+    --text-faint: #003300;
+    --text-on-accent: #000000;
+
+    --accent: #33ff33;
+    --accent-secondary: #00cc00;
+    --accent-red: #ff4400;
+    --accent-yellow: #ffff00;
+    --accent-amber: #ff8800;
+    --accent-green: #33ff33;
+    --accent-cyan: #00ffff;
+    --accent-blue: #00ffff;
+    --accent-mauve: #00ffff;
+    --accent-white: #ffffff;
+
+    --border: #003300;
+    --border-mid: #007700;
+    --border-bright: #00cc00;
+    --border-accent: #33ff33;
+
+    --radius: 0px;
+    --font-family: var(--font-mono);
+    --color-scheme: dark;
+
+    --scanline-display: block;
+}
+
+/* ── Monokai ────────────────────────────────────────────────────────────────── */
+[data-theme="monokai"] {
+    --bg-base: #272822;
+    --bg-surface: #2d2e27;
+    --bg-overlay: #31322b;
+    --bg-hover: #383830;
+    --bg-selected: #49483e;
+    --text-primary: #f8f8f2;
+    --text-secondary: #a6a68b;
+    --text-muted: #75715e;
+    --text-faint: #4a4a3e;
+    --text-on-accent: #272822;
+
+    --accent: #a6e22e;
+    --accent-secondary: #66d9ef;
+    --accent-red: #f92672;
+    --accent-yellow: #e6db74;
+    --accent-amber: #fd971f;
+    --accent-green: #a6e22e;
+    --accent-cyan: #66d9ef;
+    --accent-blue: #66d9ef;
+    --accent-mauve: #ae81ff;
+    --accent-white: #ffffff;
+
+    --border: #4a4a3e;
+    --border-mid: #75715e;
+    --border-bright: #a6a68b;
+    --border-accent: #a6e22e;
+
+    --radius: 0px;
+    --font-family: var(--font-mono);
+    --color-scheme: dark;
+
+    --scanline-display: none;
+}
+
+/* ── Minimal Dark ───────────────────────────────────────────────────────────── */
+[data-theme="dark"] {
+    --bg-base: #1a1a1a;
+    --bg-surface: #222222;
+    --bg-overlay: #252525;
+    --bg-hover: #2a2a2a;
+    --bg-selected: #4a9eff;
+    --text-primary: #e0e0e0;
+    --text-secondary: #b0b0b0;
+    --text-muted: #666666;
+    --text-faint: #333333;
+    --text-on-accent: #ffffff;
+
+    --accent: #4a9eff;
+    --accent-secondary: #357abd;
+    --accent-red: #f26d78;
+    --accent-yellow: #e6b450;
+    --accent-amber: #ff8a3c;
+    --accent-green: #4caf50;
+    --accent-cyan: #4a9eff;
+    --accent-blue: #4a9eff;
+    --accent-mauve: #b388ff;
+    --accent-white: #ffffff;
+
+    --border: #333333;
+    --border-mid: #444444;
+    --border-bright: #666666;
+    --border-accent: #4a9eff;
+
+    --radius: 4px;
+    --font-family: var(--font-sans);
+    --color-scheme: dark;
+
+    --scanline-display: none;
+}
+
+/* ── Light ──────────────────────────────────────────────────────────────────── */
+[data-theme="light"] {
+    --bg-base: #fafafa;
+    --bg-surface: #ffffff;
+    --bg-overlay: #f0f0f0;
+    --bg-hover: #e8e8e8;
+    --bg-selected: #2563eb;
+    --text-primary: #1a1a1a;
+    --text-secondary: #4a4a4a;
+    --text-muted: #888888;
+    --text-faint: #cccccc;
+    --text-on-accent: #ffffff;
+
+    --accent: #2563eb;
+    --accent-secondary: #3b82f6;
+    --accent-red: #dc2626;
+    --accent-yellow: #ca8a04;
+    --accent-amber: #ea580c;
+    --accent-green: #16a34a;
+    --accent-cyan: #0891b2;
+    --accent-blue: #2563eb;
+    --accent-mauve: #7c3aed;
+    --accent-white: #ffffff;
+
+    --border: #d4d4d4;
+    --border-mid: #a3a3a3;
+    --border-bright: #737373;
+    --border-accent: #2563eb;
+
+    --radius: 4px;
+    --font-family: var(--font-sans);
+    --color-scheme: light;
+
+    --scanline-display: none;
+}
+
+/* ── Catppuccin Mocha ───────────────────────────────────────────────────────── */
+[data-theme="catppuccin"] {
+    --bg-base: #1e1e2e;
+    --bg-surface: #252537;
+    --bg-overlay: #2a2a3d;
+    --bg-hover: #313244;
+    --bg-selected: #cba6f7;
+    --text-primary: #cdd6f4;
+    --text-secondary: #a6adc8;
+    --text-muted: #6c7086;
+    --text-faint: #45475a;
+    --text-on-accent: #1e1e2e;
+
+    --accent: #cba6f7;
+    --accent-secondary: #89b4fa;
+    --accent-red: #f38ba8;
+    --accent-yellow: #f9e2af;
+    --accent-amber: #fab387;
+    --accent-green: #a6e3a1;
+    --accent-cyan: #94e2d5;
+    --accent-blue: #89b4fa;
+    --accent-mauve: #cba6f7;
+    --accent-white: #ffffff;
+
+    --border: #45475a;
+    --border-mid: #585b70;
+    --border-bright: #6c7086;
+    --border-accent: #cba6f7;
+
+    --radius: 4px;
+    --font-family: var(--font-sans);
+    --color-scheme: dark;
+
+    --scanline-display: none;
+}
+
+/* ── Ayu Dark ───────────────────────────────────────────────────────────────── */
+[data-theme="ayu-dark"] {
+    --bg-base: #0b0e14;
+    --bg-surface: #131721;
+    --bg-overlay: #1a1f29;
+    --bg-hover: #1f2430;
+    --bg-selected: #ff8a3c;
+    --text-primary: #b3b1ad;
+    --text-secondary: #8a8986;
+    --text-muted: #5c6166;
+    --text-faint: #363a40;
+    --text-on-accent: #ffffff;
+
+    --accent: #ff8a3c;
+    --accent-secondary: #6dcbfa;
+    --accent-red: #f26d78;
+    --accent-yellow: #e6b450;
+    --accent-amber: #ff8a3c;
+    --accent-green: #aad94c;
+    --accent-cyan: #6dcbfa;
+    --accent-blue: #6dcbfa;
+    --accent-mauve: #d4bfff;
+    --accent-white: #ffffff;
+
+    --border: #363a40;
+    --border-mid: #4a4f58;
+    --border-bright: #5c6166;
+    --border-accent: #ff8a3c;
+
+    --radius: 4px;
+    --font-family: var(--font-sans);
+    --color-scheme: dark;
+
+    --scanline-display: none;
+}
+
+/* ── Ayu Light ──────────────────────────────────────────────────────────────── */
+[data-theme="ayu-light"] {
+    --bg-base: #fafafa;
+    --bg-surface: #ffffff;
+    --bg-overlay: #f0f0f0;
+    --bg-hover: #e8e8e8;
+    --bg-selected: #ff8a3c;
+    --text-primary: #5c6166;
+    --text-secondary: #8a8986;
+    --text-muted: #a3a3a3;
+    --text-faint: #d0d0d0;
+    --text-on-accent: #ffffff;
+
+    --accent: #ff8a3c;
+    --accent-secondary: #36a3d9;
+    --accent-red: #f07178;
+    --accent-yellow: #f2ae49;
+    --accent-amber: #f2ae49;
+    --accent-green: #86b300;
+    --accent-cyan: #36a3d9;
+    --accent-blue: #36a3d9;
+    --accent-mauve: #a37acc;
+    --accent-white: #ffffff;
+
+    --border: #d5d5d5;
+    --border-mid: #bfbfbf;
+    --border-bright: #a3a3a3;
+    --border-accent: #ff8a3c;
+
+    --radius: 4px;
+    --font-family: var(--font-sans);
+    --color-scheme: light;
+
+    --scanline-display: none;
 }
 
 /* ── Reset ───────────────────────────────────────────────────────────────── */
@@ -70,15 +286,15 @@ body {
 }
 
 body {
-    font-family: var(--font-mono);
+    font-family: var(--font-family);
     font-size: 12px;
     line-height: 1.5;
-    background: var(--black);
-    color: var(--green-bright);
+    background: var(--bg-base);
+    color: var(--text-primary);
     -webkit-font-smoothing: antialiased;
 }
 
-/* CRT phosphor scanline overlay */
+/* CRT phosphor scanline overlay — bios only */
 body::after {
     content: "";
     position: fixed;
@@ -92,6 +308,7 @@ body::after {
     );
     pointer-events: none;
     z-index: 9999;
+    display: var(--scanline-display);
 }
 
 #app {
@@ -106,13 +323,13 @@ body::after {
     height: 6px;
 }
 ::-webkit-scrollbar-track {
-    background: var(--black);
+    background: var(--bg-base);
 }
 ::-webkit-scrollbar-thumb {
-    background: var(--green-dim);
+    background: var(--text-muted);
 }
 ::-webkit-scrollbar-thumb:hover {
-    background: var(--green-mid);
+    background: var(--text-secondary);
 }
 
 /* ── Layout ──────────────────────────────────────────────────────────────── */
@@ -125,7 +342,7 @@ body::after {
 .sidebar {
     width: var(--sidebar-width);
     min-width: var(--sidebar-width);
-    background: var(--black);
+    background: var(--bg-surface);
     border-right: 1px solid var(--border-mid);
     display: flex;
     flex-direction: column;
@@ -142,8 +359,8 @@ body::after {
 /* ── Titlebar ────────────────────────────────────────────────────────────── */
 .titlebar {
     height: 28px;
-    background: var(--green-bright);
-    color: var(--black);
+    background: var(--accent);
+    color: var(--text-on-accent);
     display: flex;
     align-items: center;
     padding: 0 10px;
@@ -171,40 +388,40 @@ body::after {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    color: var(--black);
-    background: var(--green-mid);
+    color: var(--text-on-accent);
+    background: var(--accent-secondary);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-bottom: 1px solid var(--green-dim);
+    border-bottom: 1px solid var(--border-mid);
 }
 
-/* Connected header — green on green, highlighted */
+/* Connected header */
 .sidebar-header.connected {
-    background: var(--green-bright);
+    background: var(--accent);
 }
 
 /* ── Icon buttons ────────────────────────────────────────────────────────── */
 .btn-icon {
     background: none;
     border: 1px solid currentColor;
-    color: var(--black);
+    color: var(--text-on-accent);
     cursor: pointer;
     padding: 1px 5px;
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-family);
     font-weight: 700;
     line-height: 1;
 }
 .btn-icon:hover {
-    background: var(--black);
-    color: var(--green-bright);
-    border-color: var(--green-bright);
+    background: var(--text-on-accent);
+    color: var(--accent);
+    border-color: var(--accent);
 }
 .btn-icon.danger:hover {
-    background: var(--red);
-    color: var(--black);
-    border-color: var(--red);
+    background: var(--accent-red);
+    color: var(--text-on-accent);
+    border-color: var(--accent-red);
 }
 
 /* ── Sidebar DB/Schema selectors ─────────────────────────────────────────── */
@@ -215,7 +432,7 @@ body::after {
 .db-control-row {
     display: flex;
     align-items: center;
-    border-bottom: 1px solid var(--green-ghost);
+    border-bottom: 1px solid var(--border);
     padding: 0 8px;
     gap: 6px;
     height: 26px;
@@ -225,7 +442,7 @@ body::after {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: var(--green-dim);
+    color: var(--text-muted);
     white-space: nowrap;
     min-width: 54px;
     margin: 0;
@@ -233,19 +450,19 @@ body::after {
 }
 .db-control-row select {
     flex: 1;
-    background: var(--black);
-    color: var(--green-bright);
+    background: var(--bg-base);
+    color: var(--text-primary);
     border: none;
-    border-left: 1px solid var(--green-ghost);
+    border-left: 1px solid var(--border);
     padding: 2px 4px;
-    font-family: var(--font-mono);
+    font-family: var(--font-family);
     font-size: 11px;
     outline: none;
     cursor: pointer;
     min-width: 0;
 }
 .db-control-row select:focus {
-    border-left-color: var(--green-bright);
+    border-left-color: var(--accent);
 }
 
 /* ── Connection list ─────────────────────────────────────────────────────── */
@@ -259,30 +476,30 @@ body::after {
     display: flex;
     align-items: center;
     gap: 6px;
-    color: var(--green-mid);
-    border-bottom: 1px solid var(--green-ghost);
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border);
     font-size: 11px;
 }
 .conn-item:hover {
     background: var(--bg-overlay);
-    color: var(--green-bright);
+    color: var(--text-primary);
 }
 .conn-item.active {
     background: var(--bg-overlay);
-    color: var(--green-bright);
+    color: var(--text-primary);
 }
 .conn-engine {
     font-size: 9px;
     font-weight: 700;
     padding: 1px 4px;
-    border: 1px solid var(--green-dim);
-    color: var(--green-dim);
+    border: 1px solid var(--text-muted);
+    color: var(--text-muted);
     white-space: nowrap;
 }
 .conn-item.active .conn-engine,
 .conn-item:hover .conn-engine {
-    border-color: var(--green-mid);
-    color: var(--green-mid);
+    border-color: var(--text-secondary);
+    color: var(--text-secondary);
 }
 
 /* ── Table tree ──────────────────────────────────────────────────────────── */
@@ -290,10 +507,10 @@ body::after {
     padding: 4px 8px;
     font-size: 10px;
     font-weight: 700;
-    color: var(--green-dim);
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    background: var(--green-ghost);
+    background: var(--text-faint);
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
@@ -302,40 +519,40 @@ body::after {
 .tree-item {
     padding: 4px 8px 4px 16px;
     cursor: pointer;
-    color: var(--green-mid);
+    color: var(--text-secondary);
     font-size: 11px;
     display: flex;
     align-items: center;
     gap: 5px;
-    border-bottom: 1px solid var(--green-ghost);
+    border-bottom: 1px solid var(--border);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 .tree-item::before {
     content: "> ";
-    color: var(--green-ghost);
+    color: var(--text-faint);
 }
 .tree-item:hover {
     background: var(--bg-overlay);
-    color: var(--green-bright);
+    color: var(--text-primary);
 }
 .tree-item:hover::before {
-    color: var(--green-mid);
+    color: var(--text-secondary);
 }
 .tree-item.active {
-    color: var(--green-bright);
+    color: var(--text-primary);
     background: var(--bg-overlay);
 }
 .tree-item.active::before {
     content: ">> ";
-    color: var(--green-bright);
+    color: var(--accent);
 }
 
 /* ── Main content tabs ───────────────────────────────────────────────────── */
 .tab-bar {
     display: flex;
-    background: var(--black);
+    background: var(--bg-base);
     border-bottom: 1px solid var(--border-mid);
     padding: 0;
     gap: 0;
@@ -343,23 +560,23 @@ body::after {
 .tab {
     padding: 5px 14px;
     cursor: pointer;
-    color: var(--green-dim);
+    color: var(--text-muted);
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-family);
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    border-right: 1px solid var(--green-ghost);
+    border-right: 1px solid var(--border);
     border-bottom: 2px solid transparent;
 }
 .tab:hover {
-    color: var(--green-bright);
+    color: var(--text-primary);
     background: var(--bg-overlay);
 }
 .tab.active {
-    color: var(--black);
-    background: var(--green-bright);
-    border-bottom-color: var(--green-bright);
+    color: var(--text-on-accent);
+    background: var(--accent);
+    border-bottom-color: var(--accent);
 }
 
 /* ── Data grid ───────────────────────────────────────────────────────────── */
@@ -372,7 +589,7 @@ body::after {
 
 .grid-toolbar {
     padding: 4px 8px;
-    background: var(--black);
+    background: var(--bg-base);
     border-bottom: 1px solid var(--border-mid);
     display: flex;
     align-items: center;
@@ -388,7 +605,7 @@ body::after {
 table.data-grid {
     width: 100%;
     border-collapse: collapse;
-    font-family: var(--font-mono);
+    font-family: var(--font-family);
     font-size: 12px;
     table-layout: fixed;
 }
@@ -396,10 +613,10 @@ table.data-grid {
 table.data-grid th {
     position: sticky;
     top: 0;
-    background: var(--green-mid);
-    color: var(--black);
-    border-right: 1px solid var(--green-dim);
-    border-bottom: 2px solid var(--green-bright);
+    background: var(--accent-secondary);
+    color: var(--text-on-accent);
+    border-right: 1px solid var(--border-mid);
+    border-bottom: 2px solid var(--accent);
     padding: 4px 8px;
     text-align: left;
     font-weight: 700;
@@ -414,7 +631,7 @@ table.data-grid th {
     z-index: 1;
 }
 table.data-grid th:hover {
-    background: var(--green-bright);
+    background: var(--accent);
 }
 table.data-grid th.sort-asc::after {
     content: " /\\";
@@ -424,44 +641,44 @@ table.data-grid th.sort-desc::after {
 }
 
 table.data-grid td {
-    border-right: 1px solid var(--green-ghost);
-    border-bottom: 1px solid var(--green-ghost);
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
     padding: 3px 8px;
     max-width: 320px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--green-bright);
+    color: var(--text-primary);
 }
 table.data-grid tr:hover td {
     background: var(--bg-overlay);
 }
 table.data-grid tr.selected td {
     background: var(--bg-selected);
-    color: var(--text-on-green);
+    color: var(--text-on-accent);
 }
 table.data-grid tr {
     cursor: pointer;
 }
 table.data-grid td.null-cell {
-    color: var(--green-ghost);
+    color: var(--text-faint);
     font-style: italic;
 }
 table.data-grid td.binary-cell {
-    color: var(--green-dim);
+    color: var(--text-muted);
 }
 table.data-grid td.num-cell {
-    color: var(--cyan);
+    color: var(--accent-cyan);
 }
 table.data-grid td.bool-true {
-    color: var(--green-bright);
+    color: var(--accent-green);
     font-weight: 700;
 }
 table.data-grid td.bool-false {
-    color: var(--green-dim);
+    color: var(--text-muted);
 }
 table.data-grid td.json-cell {
-    color: var(--yellow);
+    color: var(--accent-yellow);
 }
 
 /* ── Pagination ──────────────────────────────────────────────────────────── */
@@ -470,10 +687,10 @@ table.data-grid td.json-cell {
     align-items: center;
     gap: 8px;
     padding: 4px 8px;
-    background: var(--black);
+    background: var(--bg-base);
     border-top: 1px solid var(--border-mid);
     font-size: 11px;
-    color: var(--green-dim);
+    color: var(--text-muted);
 }
 .pagination .page-info {
     flex: 1;
@@ -482,56 +699,56 @@ table.data-grid td.json-cell {
 /* ── SQL Editor ──────────────────────────────────────────────────────────── */
 .editor-toolbar {
     padding: 4px 8px;
-    background: var(--black);
+    background: var(--bg-base);
     border-bottom: 1px solid var(--border-mid);
     display: flex;
     align-items: center;
     gap: 8px;
 }
 
-/* CodeMirror overrides for BIOS theme */
+/* CodeMirror overrides */
 .cm-editor {
     height: 100%;
     font-size: 13px;
-    font-family: var(--font-mono) !important;
-    background: var(--black) !important;
+    font-family: var(--font-family) !important;
+    background: var(--bg-base) !important;
 }
 .cm-scroller {
     overflow: auto !important;
 }
 .cm-content {
-    caret-color: var(--green-bright) !important;
+    caret-color: var(--text-primary) !important;
 }
 .cm-line {
-    color: var(--green-bright);
+    color: var(--text-primary);
 }
 .cm-gutters {
-    background: var(--black) !important;
-    border-right: 1px solid var(--green-ghost) !important;
-    color: var(--green-ghost) !important;
+    background: var(--bg-base) !important;
+    border-right: 1px solid var(--border) !important;
+    color: var(--text-faint) !important;
 }
 .cm-activeLineGutter {
     background: var(--bg-overlay) !important;
-    color: var(--green-mid) !important;
+    color: var(--text-muted) !important;
 }
 .cm-activeLine {
     background: var(--bg-overlay) !important;
 }
 .cm-cursor {
-    border-left-color: var(--green-bright) !important;
+    border-left-color: var(--text-primary) !important;
 }
 .cm-selectionBackground {
-    background: var(--green-selected) !important;
+    background: var(--bg-selected) !important;
     opacity: 0.5;
 }
 .cm-tooltip {
-    background: var(--black) !important;
-    border: 1px solid var(--green-mid) !important;
-    color: var(--green-bright) !important;
+    background: var(--bg-surface) !important;
+    border: 1px solid var(--text-secondary) !important;
+    color: var(--text-primary) !important;
 }
 .cm-tooltip-autocomplete ul li[aria-selected] {
-    background: var(--green-selected) !important;
-    color: var(--black) !important;
+    background: var(--bg-selected) !important;
+    color: var(--text-on-accent) !important;
 }
 
 /* ── Filter builder ──────────────────────────────────────────────────────── */
@@ -549,78 +766,78 @@ table.data-grid td.json-cell {
     display: flex;
     align-items: center;
     gap: 4px;
-    border: 1px solid var(--green-dim);
+    border: 1px solid var(--text-muted);
     padding: 2px 6px;
-    background: var(--black);
+    background: var(--bg-base);
 }
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .btn {
     padding: 4px 12px;
-    border: 1px solid var(--green-mid);
+    border: 1px solid var(--text-secondary);
     cursor: pointer;
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-family);
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     background: transparent;
-    color: var(--green-bright);
-    border-radius: 0;
+    color: var(--text-primary);
+    border-radius: var(--radius);
 }
 .btn-primary {
-    background: var(--green-bright);
-    color: var(--black);
-    border-color: var(--green-bright);
+    background: var(--accent);
+    color: var(--text-on-accent);
+    border-color: var(--accent);
 }
 .btn-primary:hover {
-    background: var(--white);
-    border-color: var(--white);
-    color: var(--black);
+    background: var(--accent-white);
+    border-color: var(--accent-white);
+    color: var(--accent);
 }
 
 .btn-secondary {
-    border-color: var(--green-dim);
-    color: var(--green-mid);
+    border-color: var(--text-muted);
+    color: var(--text-secondary);
 }
 .btn-secondary:hover {
-    background: var(--green-mid);
-    color: var(--black);
+    background: var(--text-secondary);
+    color: var(--text-on-accent);
 }
 
 .btn-danger {
-    border-color: var(--red);
-    color: var(--red);
+    border-color: var(--accent-red);
+    color: var(--accent-red);
 }
 .btn-danger:hover {
-    background: var(--red);
-    color: var(--black);
+    background: var(--accent-red);
+    color: var(--text-on-accent);
 }
 
 /* ── Form inputs ─────────────────────────────────────────────────────────── */
 input,
 select,
 textarea {
-    background: var(--black);
-    color: var(--green-bright);
-    border: 1px solid var(--green-dim);
-    border-radius: 0;
+    background: var(--bg-base);
+    color: var(--text-primary);
+    border: 1px solid var(--text-muted);
+    border-radius: var(--radius);
     padding: 4px 8px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-family);
     outline: none;
 }
 input:focus,
 select:focus,
 textarea:focus {
-    border-color: var(--green-bright);
+    border-color: var(--accent);
 }
 input::placeholder {
-    color: var(--green-ghost);
+    color: var(--text-faint);
 }
 label {
     font-size: 11px;
-    color: var(--green-dim);
+    color: var(--text-muted);
     display: block;
     margin-bottom: 3px;
     text-transform: uppercase;
@@ -638,22 +855,22 @@ label {
     z-index: 100;
 }
 .modal {
-    background: var(--black);
-    border: 2px solid var(--green-bright);
+    background: var(--bg-surface);
+    border: 2px solid var(--accent);
     padding: 0;
     min-width: 440px;
     max-width: 560px;
     width: 100%;
-    box-shadow: 0 0 40px rgba(51, 255, 51, 0.25);
+    box-shadow: 0 0 40px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 .modal-title {
     font-size: 12px;
     font-weight: 700;
-    font-family: var(--font-mono);
+    font-family: var(--font-family);
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    background: var(--green-bright);
-    color: var(--black);
+    background: var(--accent);
+    color: var(--text-on-accent);
     padding: 6px 14px;
     margin-bottom: 0;
 }
@@ -675,7 +892,7 @@ label {
     gap: 6px;
     margin-top: 18px;
     padding: 10px 18px;
-    border-top: 1px solid var(--green-ghost);
+    border-top: 1px solid var(--border);
     background: var(--bg-overlay);
 }
 
@@ -683,9 +900,9 @@ label {
 .status-bar {
     padding: 2px 8px;
     font-size: 11px;
-    color: var(--green-dim);
-    background: var(--black);
-    border-top: 1px solid var(--green-ghost);
+    color: var(--text-muted);
+    background: var(--bg-base);
+    border-top: 1px solid var(--border);
     display: flex;
     align-items: center;
     gap: 8px;
@@ -695,15 +912,15 @@ label {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--green-ghost);
+    background: var(--text-faint);
     flex-shrink: 0;
 }
 .status-dot.connected {
-    background: var(--green-bright);
-    box-shadow: 0 0 6px var(--green-bright);
+    background: var(--accent-green);
+    box-shadow: 0 0 6px var(--accent-green);
 }
 .status-dot.error {
-    background: var(--red);
+    background: var(--accent-red);
 }
 
 /* ── Empty / placeholder states ──────────────────────────────────────────── */
@@ -714,19 +931,19 @@ label {
     align-items: center;
     justify-content: center;
     gap: 12px;
-    color: var(--green-ghost);
-    font-family: var(--font-mono);
+    color: var(--text-faint);
+    font-family: var(--font-family);
 }
 .empty-state h2 {
     font-size: 14px;
-    color: var(--green-dim);
+    color: var(--text-muted);
     letter-spacing: 0.1em;
 }
 .empty-state p {
     font-size: 12px;
 }
 .empty-state pre {
-    color: var(--green-ghost);
+    color: var(--text-faint);
     font-size: 11px;
     line-height: 1.6;
     text-align: center;
@@ -734,12 +951,12 @@ label {
 
 /* ── Error banner ────────────────────────────────────────────────────────── */
 .error-banner {
-    background: rgba(255, 68, 0, 0.08);
-    border: 1px solid var(--red);
-    color: var(--amber);
+    background: color-mix(in srgb, var(--accent-red) 8%, transparent);
+    border: 1px solid var(--accent-red);
+    color: var(--accent-amber);
     padding: 6px 10px;
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-family);
     white-space: pre-wrap;
     word-break: break-all;
     margin: 4px 8px;
@@ -747,16 +964,17 @@ label {
 
 /* ── Connection card (connections view) ──────────────────────────────────── */
 .conn-card {
-    background: var(--black);
-    border: 1px solid var(--green-dim);
+    background: var(--bg-base);
+    border: 1px solid var(--text-muted);
     padding: 10px 14px;
     display: flex;
     align-items: center;
     gap: 12px;
     margin-bottom: 6px;
+    border-radius: var(--radius);
 }
 .conn-card:hover {
-    border-color: var(--green-bright);
+    border-color: var(--accent);
 }
 .conn-card-info {
     flex: 1;
@@ -764,13 +982,13 @@ label {
 }
 .conn-card-name {
     font-weight: 700;
-    color: var(--green-bright);
+    color: var(--text-primary);
     font-size: 12px;
     letter-spacing: 0.05em;
 }
 .conn-card-detail {
     font-size: 11px;
-    color: var(--green-dim);
+    color: var(--text-muted);
     margin-top: 2px;
 }
 .conn-card-actions {
@@ -786,12 +1004,12 @@ label {
     justify-content: space-between;
     margin-bottom: 14px;
     padding-bottom: 6px;
-    border-bottom: 1px solid var(--green-dim);
+    border-bottom: 1px solid var(--text-muted);
 }
 .section-heading h2 {
     font-size: 13px;
     font-weight: 700;
-    color: var(--green-bright);
+    color: var(--text-primary);
     letter-spacing: 0.1em;
     text-transform: uppercase;
 }
@@ -816,7 +1034,7 @@ label {
     width: 0;
     min-width: 0;
     overflow: hidden;
-    background: var(--black);
+    background: var(--bg-surface);
     border-left: 1px solid var(--border-mid);
     display: flex;
     flex-direction: column;
@@ -840,13 +1058,13 @@ label {
     justify-content: center;
     gap: 8px;
     padding: 16px;
-    color: var(--green-ghost);
+    color: var(--text-faint);
     font-size: 11px;
     text-align: center;
 }
 .record-panel-hint {
     font-size: 10px;
-    color: var(--green-dim);
+    color: var(--text-muted);
 }
 .record-panel-header {
     display: flex;
@@ -861,19 +1079,19 @@ label {
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.08em;
-    color: var(--green-bright);
+    color: var(--text-primary);
     flex: 1;
 }
 .record-dirty-badge {
     font-size: 10px;
-    color: var(--amber);
+    color: var(--accent-amber);
     letter-spacing: 0.06em;
 }
 .record-panel-toolbar {
     display: flex;
     gap: 6px;
     padding: 6px 10px;
-    border-bottom: 1px solid var(--green-ghost);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 .record-panel-error {
@@ -888,10 +1106,10 @@ label {
 .record-field {
     margin-bottom: 10px;
     padding-bottom: 8px;
-    border-bottom: 1px solid var(--green-ghost);
+    border-bottom: 1px solid var(--border);
 }
 .record-field-pk .record-field-name {
-    color: var(--cyan);
+    color: var(--accent-cyan);
 }
 .record-field-label {
     display: flex;
@@ -902,11 +1120,11 @@ label {
 .record-field-name {
     font-size: 11px;
     font-weight: 700;
-    color: var(--green-bright);
+    color: var(--text-primary);
 }
 .record-field-type {
     font-size: 9px;
-    color: var(--green-ghost);
+    color: var(--text-faint);
     text-transform: uppercase;
 }
 .record-field-input {
@@ -923,7 +1141,7 @@ label {
     gap: 4px;
     margin-top: 4px;
     font-size: 10px;
-    color: var(--green-dim);
+    color: var(--text-muted);
     cursor: pointer;
 }
 .record-null-check input {
@@ -945,14 +1163,60 @@ label {
     font-size: 10px;
 }
 .record-now-btn.active {
-    background: var(--green-bright);
-    color: var(--black);
-    border-color: var(--green-bright);
+    background: var(--accent);
+    color: var(--text-on-accent);
+    border-color: var(--accent);
 }
 
-/* Native date/time inputs — match terminal theme */
+/* Native date/time inputs — match color scheme */
 input[type="date"],
 input[type="datetime-local"],
 input[type="time"] {
-    color-scheme: dark;
+    color-scheme: var(--color-scheme);
+}
+
+/* ── Theme picker (appearance modal) ─────────────────────────────────────── */
+.theme-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.theme-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-mid);
+    background: var(--bg-base);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-family: var(--font-family);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border-radius: var(--radius);
+    transition: border-color 0.1s;
+}
+.theme-option:hover {
+    border-color: var(--accent);
+}
+.theme-option.active {
+    border-color: var(--accent);
+    background: var(--bg-overlay);
+    outline: 1px solid var(--accent);
+}
+.theme-option .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.theme-option .current-badge {
+    font-size: 9px;
+    color: var(--accent);
+    margin-left: auto;
+    font-weight: 400;
+    letter-spacing: 0.05em;
 }

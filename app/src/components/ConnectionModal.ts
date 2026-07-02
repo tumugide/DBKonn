@@ -160,19 +160,19 @@ export function showConnectionModal(
   }
 
   overlay.querySelector("#cm-test")!.addEventListener("click", async () => {
-    setStatus("TESTING CONNECTION...", "color:var(--green-dim)");
+    setStatus("TESTING CONNECTION...", "color:var(--text-muted)");
     try {
       await ipc.testConnection(buildConfig());
-      setStatus("[ OK ] CONNECTION SUCCESSFUL", "color:var(--green-bright)");
+      setStatus("[ OK ] CONNECTION SUCCESSFUL", "color:var(--accent-green)");
     } catch (e) {
-      setStatus(`[ !! ] ${e}`, "color:var(--amber)");
+      setStatus(`[ !! ] ${e}`, "color:var(--accent-amber)");
     }
   });
 
   overlay.querySelector("#cm-save")!.addEventListener("click", async () => {
     const cfg = buildConfig();
     if (!cfg.name) {
-      setStatus("NAME IS REQUIRED", "color:var(--amber)");
+      setStatus("NAME IS REQUIRED", "color:var(--accent-amber)");
       return;
     }
     try {
@@ -182,7 +182,7 @@ export function showConnectionModal(
       overlay.remove();
       onSaved?.();
     } catch (e) {
-      setStatus(`ERROR: ${e}`, "color:var(--red)");
+      setStatus(`ERROR: ${e}`, "color:var(--accent-red)");
     }
   });
 
@@ -197,7 +197,7 @@ export function showConnectionModal(
     statusEl.textContent = msg;
     statusEl.setAttribute(
       "style",
-      `font-size:11px;min-height:16px;margin-top:4px;font-family:var(--font-mono);${style}`,
+      `font-size:11px;min-height:16px;margin-top:4px;${style}`,
     );
   }
 }
