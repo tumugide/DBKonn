@@ -156,11 +156,15 @@ export class RecordPanel {
           inputHtml = `
             <textarea class="record-field-input record-field-json" data-idx="${idx}"
               rows="3" ${isPk || isNull ? "disabled" : ""}>${esc(formatDisplayValue(val))}</textarea>`;
-        } else {
+        } else if (typeof val === "number") {
           inputHtml = `
             <input class="record-field-input" data-idx="${idx}" type="text"
               value="${esc(formatDisplayValue(val))}"
               ${isPk || isNull ? "disabled" : ""} />`;
+        } else {
+          inputHtml = `
+            <textarea class="record-field-input record-field-text" data-idx="${idx}"
+              rows="1" ${isPk || isNull ? "disabled" : ""}>${esc(formatDisplayValue(val))}</textarea>`;
         }
 
         const nullCheck = col.nullable
@@ -199,6 +203,11 @@ export class RecordPanel {
     this.wireEvents();
   }
 
+  private autoGrow(el: HTMLTextAreaElement) {
+    el.style.height = "auto";
+    el.style.height = Math.min(Math.max(el.scrollHeight, 24), 220) + "px";
+  }
+
   private wireEvents() {
     document.getElementById("rp-close")?.addEventListener("click", () => {
       if (this.record?.dirty) {
@@ -230,10 +239,16 @@ export class RecordPanel {
             el.disabled = false;
           }
         }
+        if (el instanceof HTMLTextAreaElement) this.autoGrow(el);
         this.syncDraftFromDom();
       });
       el.addEventListener("change", () => this.syncDraftFromDom());
     });
+
+    // Size textareas to their content on render
+    this.container
+      .querySelectorAll<HTMLTextAreaElement>(".record-field-text")
+      .forEach((ta) => this.autoGrow(ta));
 
     this.container.querySelectorAll(".record-null-toggle").forEach((el) => {
       el.addEventListener("change", () => {

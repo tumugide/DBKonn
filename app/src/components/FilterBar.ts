@@ -52,6 +52,10 @@ export class FilterBar {
     this.render();
   }
 
+  getRules(): FilterRule[] {
+    return this.rules.map((r) => ({ ...r }));
+  }
+
   clear() {
     this.rules = [];
     this.render();

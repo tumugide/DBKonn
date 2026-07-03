@@ -380,6 +380,56 @@ body::after {
     width: 68px;
     min-width: 68px;
 }
+.titlebar-spacer {
+    flex: 1;
+}
+.titlebar-center {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    -webkit-app-region: no-drag;
+}
+.titlebar .btn-icon {
+    -webkit-app-region: no-drag;
+}
+
+/* ── View-switch buttons (SQL/Connections in titlebar, DATA in status bar) ─── */
+.view-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    cursor: pointer;
+    padding: 2px 9px;
+    font-family: var(--font-family);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border-radius: var(--radius);
+    line-height: 1.4;
+    opacity: 0.7;
+    transition: opacity 0.1s, background 0.1s;
+}
+.view-btn:hover {
+    opacity: 1;
+}
+.titlebar .view-btn {
+    color: var(--text-on-accent);
+}
+.titlebar .view-btn.active {
+    background: var(--text-on-accent);
+    color: var(--accent);
+    border-color: var(--text-on-accent);
+    opacity: 1;
+}
+.status-bar .view-btn {
+    color: var(--text-secondary);
+}
+.status-bar .view-btn.active {
+    background: var(--accent);
+    color: var(--text-on-accent);
+    border-color: var(--accent);
+    opacity: 1;
+}
 
 /* ── Sidebar header bar ──────────────────────────────────────────────────── */
 .sidebar-header {
@@ -438,7 +488,7 @@ body::after {
     height: 26px;
 }
 .db-control-row label {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -478,7 +528,8 @@ body::after {
     gap: 6px;
     color: var(--text-secondary);
     border-bottom: 1px solid var(--border);
-    font-size: 11px;
+    font-size: 12px;
+    font-weight: 500;
 }
 .conn-item:hover {
     background: var(--bg-overlay);
@@ -505,7 +556,7 @@ body::after {
 /* ── Table tree ──────────────────────────────────────────────────────────── */
 .tree-header {
     padding: 4px 8px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
@@ -520,7 +571,8 @@ body::after {
     padding: 4px 8px 4px 16px;
     cursor: pointer;
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 12px;
+    font-weight: 600;
     display: flex;
     align-items: center;
     gap: 5px;
@@ -549,34 +601,111 @@ body::after {
     color: var(--accent);
 }
 
-/* ── Main content tabs ───────────────────────────────────────────────────── */
-.tab-bar {
+/* ── Table tab strip (top, browser-style) ──────────────────────────────────── */
+.table-tab-strip {
     display: flex;
-    background: var(--bg-base);
+    align-items: stretch;
+    background: var(--bg-surface);
     border-bottom: 1px solid var(--border-mid);
     padding: 0;
     gap: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-shrink: 0;
+    min-height: 30px;
 }
-.tab {
-    padding: 5px 14px;
+.table-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px 4px 12px;
     cursor: pointer;
-    color: var(--text-muted);
-    font-size: 11px;
+    color: var(--text-secondary);
+    font-size: 12px;
     font-family: var(--font-family);
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.03em;
     border-right: 1px solid var(--border);
     border-bottom: 2px solid transparent;
+    background: var(--bg-surface);
+    white-space: nowrap;
+    max-width: 220px;
+    transition: background 0.1s, color 0.1s;
 }
-.tab:hover {
+.table-tab:hover {
+    background: var(--bg-overlay);
     color: var(--text-primary);
+}
+.table-tab.active {
+    color: var(--text-primary);
+    background: var(--bg-base);
+    border-bottom-color: var(--accent);
+}
+.table-tab-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.table-tab-close {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0;
+    margin-left: 2px;
+    font-size: 11px;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius);
+    opacity: 0;
+    flex-shrink: 0;
+}
+.table-tab:hover .table-tab-close,
+.table-tab.active .table-tab-close {
+    opacity: 1;
+}
+.table-tab-close:hover {
+    background: var(--accent-red);
+    color: var(--text-on-accent);
+}
+.table-tab-add {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0 10px;
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+.table-tab-add:hover {
+    color: var(--accent);
     background: var(--bg-overlay);
 }
-.tab.active {
-    color: var(--text-on-accent);
-    background: var(--accent);
-    border-bottom-color: var(--accent);
+.table-tab-closeall {
+    border: none;
+    background: transparent;
+    color: var(--text-faint);
+    cursor: pointer;
+    padding: 0 8px;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-left: auto;
+}
+.table-tab-closeall:hover {
+    color: var(--accent-red);
+    background: var(--bg-overlay);
 }
 
 /* ── Data grid ───────────────────────────────────────────────────────────── */
@@ -1134,6 +1263,17 @@ label {
     font-size: 11px;
     resize: vertical;
     min-height: 48px;
+}
+.record-field-text {
+    font-size: 12px;
+    resize: vertical;
+    min-height: 26px;
+    line-height: 1.4;
+    max-height: 220px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--font-family);
 }
 .record-null-check {
     display: inline-flex;

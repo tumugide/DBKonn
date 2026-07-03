@@ -6,6 +6,7 @@ import type {
   ColumnInfo,
   RowValue,
 } from "./ipc";
+import type { FilterRule } from "./filter";
 
 // ── Reactive mini-store (no framework) ───────────────────────────────────────
 
@@ -69,6 +70,19 @@ export interface ActiveConnection {
   selectedTable?: string;
 }
 
+export interface OpenTableTab {
+  id: string;
+  name: string;
+  schema?: string;
+  database?: string;
+  connId: string;
+  // Per-tab state — preserved when switching between tabs
+  tableState: TableState;
+  tableMetadata: ColumnInfo[];
+  selectedRecord: SelectedRecord | null;
+  filterRules: FilterRule[];
+}
+
 export interface TableState {
   result?: QueryResult;
   totalRows: number;
@@ -109,4 +123,7 @@ export const appState = {
   sqlLoading: new Signal<boolean>(false),
   sqlError: new Signal<string | null>(null),
   status: new Signal<string>("READY"),
+  openTableTabs: new Signal<OpenTableTab[]>([]),
+  activeTableTab: new Signal<string | null>(null),
+  filterRules: new Signal<FilterRule[]>([]),
 };
