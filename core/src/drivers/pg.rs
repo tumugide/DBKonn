@@ -284,10 +284,17 @@ impl DbConnection for PgDriver {
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>, CoreError> {
+        // pg_namespace (catalog metadata) lists every schema that exists,
+        // regardless of privileges — information_schema.schemata only shows
+        // schemas the connected role has been explicitly granted USAGE on,
+        // which silently hid schemas without an explicit grant (they still
+        // show up fine once you actually query them, just not in this list).
         let rows = sqlx::query(
-            "SELECT schema_name FROM information_schema.schemata \
-             WHERE schema_name NOT IN ('pg_catalog','information_schema','pg_toast') \
-             ORDER BY schema_name",
+            "SELECT nspname FROM pg_catalog.pg_namespace \
+             WHERE nspname NOT IN ('pg_catalog','information_schema') \
+             AND nspname NOT LIKE 'pg_toast%' \
+             AND nspname NOT LIKE 'pg_temp%' \
+             ORDER BY nspname",
         )
         .fetch_all(&self.pool)
         .await?;

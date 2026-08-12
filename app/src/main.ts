@@ -985,6 +985,17 @@ function showConnectionsScreen() {
   heading.appendChild(addBtn);
   mainContent.appendChild(heading);
 
+  if (pendingRestores.size > 0) {
+    const names = appState.connections.value
+      .filter((c) => pendingRestores.has(c.id))
+      .map((c) => c.name);
+    const banner = document.createElement("div");
+    banner.className = "error-banner";
+    banner.style.margin = "0 0 14px";
+    banner.textContent = `Couldn't automatically reconnect to ${names.join(", ") || "some connections"} on launch. Click Connect to retry — their tabs are still remembered.`;
+    mainContent.appendChild(banner);
+  }
+
   if (conns.length === 0) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
@@ -1053,15 +1064,18 @@ function showConnectionsScreen() {
 async function establishConnSession(cfg: ConnectionConfig): Promise<ConnSession> {
   const connId = await ipc.connectDb(cfg);
 
-  const [databases, schemas, tables] = await Promise.all([
+  const [databases, schemas] = await Promise.all([
     ipc.listDatabases(connId).catch(() => [] as string[]),
     ipc.listSchemas(connId).catch(() => []),
-    ipc.listTables(connId),
   ]);
 
   const defaultSchema =
     schemas.find((s) => s.name === "public" || s.name === "dbo")?.name ??
     schemas[0]?.name;
+
+  // Resolve the default schema *before* listing tables, so the very first
+  // table list matches it — same as every later switchSchema() call does.
+  const tables = await ipc.listTables(connId, defaultSchema);
 
   // For engines without a database concept (SQLite), use the config's db name
   const selectedDb =
@@ -1083,6 +1097,16 @@ async function establishConnSession(cfg: ConnectionConfig): Promise<ConnSession>
 
 function remapRestoredTabs(tabs: AppTab[], connId: string): AppTab[] {
   return tabs.map((t) => ({ ...t, connId }));
+}
+
+// "Connected: <name>" for engines with no database concept (SQLite), or
+// "Connected: <name> / <database>" for the rest — matches TablePlus, which
+// always names the active database alongside the connection, not just the
+// connection itself.
+function connectedStatusText(session: ConnSession): string {
+  return session.selectedDatabase
+    ? `Connected: ${session.config.name} / ${session.selectedDatabase}`
+    : `Connected: ${session.config.name}`;
 }
 
 // Points activeConnId/activeConn/openTabs/activeTab at a session (already
@@ -1122,21 +1146,29 @@ function switchToConnSession(id: string) {
 
   focusSession(target);
   statusDot.className = "status-dot connected";
-  appState.status.set(`Connected: ${target.config.name}`);
+  appState.status.set(connectedStatusText(target));
   activateFocusedSession(target);
   persistSessionNow();
 }
 
+// Connections that boot() couldn't auto-reconnect (keyed by saved-config
+// id), so a manual "Connect" click on them still restores their tabs
+// instead of starting blank. Entries are removed once a reconnect succeeds.
+const pendingRestores = new Map<string, StoredConnSession>();
+
 // The interactive "user picked a saved connection" path — opens a new
 // session alongside whatever else is already connected, or just focuses it
-// if it's already open. `restore` (used by boot()) seeds it with a
-// previously-persisted tab strip instead of a blank query tab.
-async function connectToDb(cfg: ConnectionConfig, restore?: StoredConnSession) {
+// if it's already open. `restoreParam` (used by boot()) seeds it with a
+// previously-persisted tab strip instead of a blank query tab; a manual
+// click falls back to a pending auto-reconnect that failed earlier, if any.
+async function connectToDb(cfg: ConnectionConfig, restoreParam?: StoredConnSession) {
   const existing = appState.connSessions.value.find((s) => s.config.id === cfg.id);
-  if (existing && !restore) {
+  if (existing && !restoreParam) {
     switchToConnSession(existing.id);
     return;
   }
+
+  const restore = restoreParam ?? pendingRestores.get(cfg.id);
 
   appState.status.set(`Connecting: ${cfg.name}…`);
   statusDot.className = "status-dot";
@@ -1158,7 +1190,8 @@ async function connectToDb(cfg: ConnectionConfig, restore?: StoredConnSession) {
     focusSession(session);
 
     statusDot.className = "status-dot connected";
-    appState.status.set(`Connected: ${cfg.name}`);
+    appState.status.set(connectedStatusText(session));
+    pendingRestores.delete(cfg.id);
 
     activateFocusedSession(session);
   } catch (e) {
@@ -1206,7 +1239,11 @@ async function boot() {
     return;
   }
 
-  appState.status.set("Restoring previous session…");
+  appState.status.set(
+    restorable.length === 1
+      ? `Reconnecting to ${restorable[0]!.cfg.name}…`
+      : `Reconnecting to ${restorable.length} connections…`,
+  );
 
   const results = await Promise.allSettled(
     restorable.map(async ({ stored: s, cfg }) => {
@@ -1223,16 +1260,28 @@ async function boot() {
   );
 
   const restoredSessions: ConnSession[] = [];
+  const failed: { name: string; reason: unknown }[] = [];
   results.forEach((r, i) => {
+    const { stored: s, cfg } = restorable[i]!;
     if (r.status === "fulfilled") {
       restoredSessions.push(r.value);
     } else {
-      console.warn(`Failed to restore connection "${restorable[i]!.cfg.name}":`, r.reason);
+      console.warn(`Failed to reconnect "${cfg.name}":`, r.reason);
+      // Keep it around so a manual Connect click still restores its tabs.
+      pendingRestores.set(cfg.id, s);
+      failed.push({ name: cfg.name, reason: r.reason });
     }
   });
 
+  // Don't clear the stored session on a failed reconnect (server down,
+  // offline, etc.) — the whole point is to remember it and keep trying,
+  // not to silently forget the user's open connections and tabs.
   if (restoredSessions.length === 0) {
-    clearSession();
+    appState.status.set(
+      failed.length === 1
+        ? `Couldn't reconnect to ${failed[0]!.name}: ${failed[0]!.reason}`
+        : `Couldn't reconnect to ${failed.length} connections — click one to retry`,
+    );
     renderContentArea();
     return;
   }
@@ -1245,7 +1294,11 @@ async function boot() {
 
   focusSession(focusTarget);
   statusDot.className = "status-dot connected";
-  appState.status.set(`Connected: ${focusTarget.config.name}`);
+  appState.status.set(
+    failed.length > 0
+      ? `${connectedStatusText(focusTarget)} (${failed.length} failed to reconnect)`
+      : connectedStatusText(focusTarget),
+  );
   activateFocusedSession(focusTarget);
 }
 
