@@ -317,6 +317,82 @@ body {
     overflow: hidden;
 }
 
+/* ── Connection rail (avatar switcher for open connections) ────────────────── */
+.conn-rail {
+    width: 52px;
+    min-width: 52px;
+    background: var(--bg-overlay);
+    border-right: 1px solid var(--border);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 0;
+    overflow-y: auto;
+}
+.conn-avatar {
+    position: relative;
+    width: 32px;
+    height: 32px;
+    min-height: 32px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: var(--font-family);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: border-color 0.1s, transform 0.1s;
+}
+.conn-avatar:hover {
+    transform: scale(1.06);
+}
+.conn-avatar.active {
+    border-color: var(--accent);
+}
+.conn-avatar-close {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent-red);
+    color: #fff;
+    font-size: 8px;
+    line-height: 1;
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+.conn-avatar:hover .conn-avatar-close {
+    display: flex;
+}
+.conn-rail-add {
+    width: 32px;
+    height: 32px;
+    min-height: 32px;
+    border-radius: 50%;
+    border: 1px dashed var(--border-bright);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.conn-rail-add:hover {
+    color: var(--text-primary);
+    border-color: var(--text-primary);
+}
+
 .main-area {
     flex: 1;
     display: flex;

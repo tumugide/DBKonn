@@ -3,7 +3,7 @@ import { ipc, type ConnectionConfig, type ColumnInfo } from "./lib/ipc";
 import {
   appState,
   type ThemeType,
-  type ActiveConnection,
+  type ConnSession,
   type AppTab,
   type TableTab,
   type QueryTab,
@@ -17,7 +17,12 @@ import { RecordPanel } from "./components/RecordPanel";
 import { showConnectionModal } from "./components/ConnectionModal";
 import { cloneRowValue } from "./lib/rowEdit";
 import type { RowValue } from "./lib/ipc";
-import { saveSession, loadSession, clearSession, type StoredSession } from "./lib/session";
+import {
+  saveSession,
+  loadSession,
+  clearSession,
+  type StoredConnSession,
+} from "./lib/session";
 
 // ── Theme application ─────────────────────────────────────────────────────────
 
@@ -96,6 +101,7 @@ app.innerHTML = `
     <button class="btn-icon" id="btn-appearance" title="Appearance settings">Theme</button>
   </div>
   <div class="app-layout">
+    <aside class="conn-rail" id="conn-rail"></aside>
     <aside class="sidebar" id="sidebar"></aside>
     <div class="main-area">
       <div class="table-tab-strip" id="table-tabs-list"></div>
@@ -110,6 +116,7 @@ app.innerHTML = `
 `;
 
 // ── Element refs ──────────────────────────────────────────────────────────────
+const connRailEl = document.getElementById("conn-rail")!;
 const sidebarEl = document.getElementById("sidebar")!;
 const mainContent = document.getElementById("tab-content-area")!;
 const statusText = document.getElementById("status-text")!;
@@ -140,6 +147,8 @@ newQueryBtn.disabled = !appState.activeConn.value;
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 
 function renderSidebar() {
+  renderConnRail();
+
   const ac = appState.activeConn.value;
   const buf: string[] = [];
 
@@ -214,7 +223,7 @@ function renderSidebar() {
   if (ac) {
     document
       .getElementById("sb-disconnect")
-      ?.addEventListener("click", disconnectFromDb);
+      ?.addEventListener("click", () => disconnectSession(ac.id));
 
     document.getElementById("sb-db-select")?.addEventListener("change", (e) => {
       const db = (e.target as HTMLSelectElement).value;
@@ -265,6 +274,66 @@ function renderConnList() {
     item.addEventListener("click", () => connectToDb(cfg));
     listEl.appendChild(item);
   });
+}
+
+// ── Connection rail (avatar switcher for open connections) ─────────────────────
+
+function initialsFor(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "?";
+  if (words.length === 1) return words[0]!.slice(0, 2).toUpperCase();
+  return (words[0]![0]! + words[1]![0]!).toUpperCase();
+}
+
+// Deterministic color per saved connection (not per session) so the same
+// connection always gets the same avatar color, independent of theme.
+function avatarColor(seed: string): string {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  const hue = hash % 360;
+  return `hsl(${hue}, 55%, 42%)`;
+}
+
+function renderConnRail() {
+  const sessions = appState.connSessions.value;
+  const activeId = appState.activeConnId.value;
+
+  connRailEl.innerHTML = "";
+  connRailEl.style.display = sessions.length === 0 ? "none" : "flex";
+  if (sessions.length === 0) return;
+
+  sessions.forEach((s) => {
+    const btn = document.createElement("button");
+    btn.className = `conn-avatar${s.id === activeId ? " active" : ""}`;
+    btn.style.background = avatarColor(s.config.id);
+    btn.title = s.config.name;
+    btn.textContent = initialsFor(s.config.name);
+    btn.onclick = () => switchToConnSession(s.id);
+
+    const closeBtn = document.createElement("span");
+    closeBtn.className = "conn-avatar-close";
+    closeBtn.innerHTML = "&#10005;";
+    closeBtn.title = "Disconnect";
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      disconnectSession(s.id);
+    };
+    btn.appendChild(closeBtn);
+
+    connRailEl.appendChild(btn);
+  });
+
+  const addBtn = document.createElement("button");
+  addBtn.className = "conn-rail-add";
+  addBtn.innerHTML = "+";
+  addBtn.title = "Open another connection";
+  addBtn.onclick = () => {
+    tabStripEl.style.display = "none";
+    showConnectionsScreen();
+  };
+  connRailEl.appendChild(addBtn);
 }
 
 // ── Database / Schema switching ───────────────────────────────────────────────
@@ -338,21 +407,45 @@ async function switchSchema(schemaName: string) {
   }
 }
 
-async function disconnectFromDb() {
-  const ac = appState.activeConn.value;
-  if (!ac) return;
+// Disconnects a single connection session — the focused one (from the
+// sidebar "Quit" button) or a background one (from the rail's hover-×) —
+// leaving every other open connection untouched.
+async function disconnectSession(id: string) {
+  const list = appState.connSessions.value;
+  const session = list.find((s) => s.id === id);
+  if (!session) return;
+
+  const isFocused = id === appState.activeConnId.value;
+  if (isFocused && appState.selectedRecord.value?.dirty) {
+    if (!confirm("Discard unsaved changes and disconnect?")) return;
+  }
+
   try {
-    await ipc.disconnectDb(ac.connId);
+    await ipc.disconnectDb(session.connId);
   } catch {
     /* ignore */
   }
-  appState.activeConn.set(null);
-  resetTabsAndLiveState();
-  clearSession();
-  statusDot.className = "status-dot";
-  appState.status.set("Disconnected");
-  renderSidebar();
-  renderContentArea();
+
+  const remaining = list.filter((s) => s.id !== id);
+  appState.connSessions.set(remaining);
+
+  if (isFocused) {
+    if (remaining.length > 0) {
+      switchToConnSession(remaining[0]!.id);
+    } else {
+      appState.activeConnId.set(null);
+      appState.activeConn.set(null);
+      resetTabsAndLiveState();
+      statusDot.className = "status-dot";
+      appState.status.set("Disconnected");
+      renderSidebar();
+      renderContentArea();
+    }
+  } else {
+    renderSidebar();
+  }
+
+  persistSessionNow();
 }
 
 function resetTabsAndLiveState() {
@@ -364,18 +457,18 @@ function resetTabsAndLiveState() {
   appState.filterRules.set([]);
 }
 
-// Flush the currently-active tab's live state into the tabs array, then
-// write the open tabs + active connection to localStorage so they can be
-// restored on the next launch — unless the tab list is empty, in which case
+// Flush the currently-active tab's live state into the focused session, then
+// write every open connection session to localStorage so they can all be
+// restored on the next launch — unless nothing is open, in which case
 // there's nothing worth remembering.
 function persistSessionNow() {
   persistCurrentTabState();
-  const ac = appState.activeConn.value;
-  if (!ac) {
+  const sessions = appState.connSessions.value;
+  if (sessions.length === 0) {
     clearSession();
     return;
   }
-  saveSession(ac.config.id, appState.activeTab.value, appState.openTabs.value);
+  saveSession(sessions, appState.activeConn.value?.config.id ?? null);
 }
 
 // ── Content area (tab strip + active tab body) ─────────────────────────────────
@@ -871,6 +964,7 @@ function changePage(newPage: number) {
 }
 
 function showConnectionsScreen() {
+  mainContent.innerHTML = "";
   mainContent.style.overflow = "auto";
   mainContent.style.padding = "20px";
 
@@ -954,96 +1048,124 @@ function showConnectionsScreen() {
 
 // ── Connect to DB ─────────────────────────────────────────────────────────────
 
-async function connectToDb(cfg: ConnectionConfig, restore?: StoredSession) {
+// Raw IPC connect + metadata load — no signal/UI writes. Returns a fresh,
+// unfocused ConnSession with an empty tab strip.
+async function establishConnSession(cfg: ConnectionConfig): Promise<ConnSession> {
+  const connId = await ipc.connectDb(cfg);
+
+  const [databases, schemas, tables] = await Promise.all([
+    ipc.listDatabases(connId).catch(() => [] as string[]),
+    ipc.listSchemas(connId).catch(() => []),
+    ipc.listTables(connId),
+  ]);
+
+  const defaultSchema =
+    schemas.find((s) => s.name === "public" || s.name === "dbo")?.name ??
+    schemas[0]?.name;
+
+  // For engines without a database concept (SQLite), use the config's db name
+  const selectedDb =
+    cfg.database || (databases.length > 0 ? databases[0] : undefined);
+
+  return {
+    id: crypto.randomUUID(),
+    connId,
+    config: cfg,
+    databases,
+    selectedDatabase: selectedDb,
+    schemas,
+    selectedSchema: defaultSchema,
+    tables,
+    openTabs: [],
+    activeTabId: null,
+  };
+}
+
+function remapRestoredTabs(tabs: AppTab[], connId: string): AppTab[] {
+  return tabs.map((t) => ({ ...t, connId }));
+}
+
+// Points activeConnId/activeConn/openTabs/activeTab at a session (already
+// present in connSessions) and refreshes the sidebar/rail to match.
+function focusSession(session: ConnSession) {
+  appState.activeConnId.set(session.id);
+  appState.activeConn.set(session);
+  appState.openTabs.set([...session.openTabs]);
+  appState.activeTab.set(session.activeTabId);
+  renderSidebar();
+}
+
+// Renders the just-focused session's tab strip + content: hydrates the
+// table-tab scratch signals if its active tab is a table, or opens a
+// default query tab if it has no tabs at all.
+function activateFocusedSession(session: ConnSession) {
+  if (session.openTabs.length > 0) {
+    const activeTabObj = session.openTabs.find((t) => t.id === session.activeTabId);
+    if (activeTabObj?.kind === "table") loadTableTabIntoSignals(activeTabObj);
+    tabStripEl.style.display = "";
+    renderTabStrip();
+    renderActiveTabContent();
+  } else {
+    openQueryTab();
+  }
+}
+
+// Switches focus to an already-open connection session. Used by the rail's
+// avatar buttons.
+function switchToConnSession(id: string) {
+  if (id === appState.activeConnId.value) return;
+  const target = appState.connSessions.value.find((s) => s.id === id);
+  if (!target) return;
+
+  // Save the outgoing focused session's live tab state first
+  persistCurrentTabState();
+
+  focusSession(target);
+  statusDot.className = "status-dot connected";
+  appState.status.set(`Connected: ${target.config.name}`);
+  activateFocusedSession(target);
+  persistSessionNow();
+}
+
+// The interactive "user picked a saved connection" path — opens a new
+// session alongside whatever else is already connected, or just focuses it
+// if it's already open. `restore` (used by boot()) seeds it with a
+// previously-persisted tab strip instead of a blank query tab.
+async function connectToDb(cfg: ConnectionConfig, restore?: StoredConnSession) {
+  const existing = appState.connSessions.value.find((s) => s.config.id === cfg.id);
+  if (existing && !restore) {
+    switchToConnSession(existing.id);
+    return;
+  }
+
   appState.status.set(`Connecting: ${cfg.name}…`);
   statusDot.className = "status-dot";
 
   try {
-    const connId = await ipc.connectDb(cfg);
+    const session = await establishConnSession(cfg);
 
-    // Load databases, schemas, and tables in parallel
-    const [databases, schemas, tables] = await Promise.all([
-      ipc.listDatabases(connId).catch(() => [] as string[]),
-      ipc.listSchemas(connId).catch(() => []),
-      ipc.listTables(connId),
-    ]);
+    if (restore) {
+      session.selectedDatabase = restore.selectedDatabase ?? session.selectedDatabase;
+      session.selectedSchema = restore.selectedSchema ?? session.selectedSchema;
+      session.openTabs = remapRestoredTabs(restore.tabs, session.connId);
+      session.activeTabId =
+        restore.activeTabId && session.openTabs.some((t) => t.id === restore.activeTabId)
+          ? restore.activeTabId
+          : (session.openTabs[0]?.id ?? null);
+    }
 
-    const defaultSchema =
-      schemas.find((s) => s.name === "public" || s.name === "dbo")?.name ??
-      schemas[0]?.name;
-
-    // For engines without a database concept (SQLite), use the config's db name
-    const selectedDb =
-      cfg.database || (databases.length > 0 ? databases[0] : undefined);
-
-    appState.activeConn.set({
-      connId,
-      config: cfg,
-      databases,
-      selectedDatabase: selectedDb,
-      schemas,
-      selectedSchema: defaultSchema,
-      tables,
-    });
+    appState.connSessions.set([...appState.connSessions.value, session]);
+    focusSession(session);
 
     statusDot.className = "status-dot connected";
     appState.status.set(`Connected: ${cfg.name}`);
 
-    // Fresh connection — ensure clean tab state
-    resetTabsAndLiveState();
-    renderSidebar();
-
-    let restored = false;
-    if (restore && restore.tabs.length > 0) {
-      try {
-        restoreSessionTabs(restore);
-        restored = true;
-      } catch (e) {
-        console.warn("Session restore failed, starting fresh:", e);
-        clearSession();
-      }
-    }
-    if (!restored) {
-      // Land on a usable default query tab, like TablePlus does on connect
-      openQueryTab();
-    }
+    activateFocusedSession(session);
   } catch (e) {
     statusDot.className = "status-dot error";
     appState.status.set(`Error: ${e}`);
     alert(`Connection failed:\n${e}`);
   }
-}
-
-// Re-hydrate a previously-persisted set of open tabs onto a freshly
-// established connection (the connId inside each stored tab is stale — it
-// belonged to the old IPC session — so it's remapped to the new one).
-function restoreSessionTabs(session: StoredSession) {
-  const ac = appState.activeConn.value;
-  if (!ac) return;
-
-  const tabs = session.tabs.map((t) => ({ ...t, connId: ac.connId }));
-  appState.openTabs.set(tabs);
-
-  const activeId =
-    session.activeTabId && tabs.some((t) => t.id === session.activeTabId)
-      ? session.activeTabId
-      : tabs[0]!.id;
-  appState.activeTab.set(activeId);
-
-  const activeTabObj = tabs.find((t) => t.id === activeId)!;
-  if (activeTabObj.kind === "table") {
-    appState.activeConn.set({
-      ...ac,
-      selectedTable: activeTabObj.name,
-      selectedSchema: activeTabObj.schema ?? ac.selectedSchema,
-      selectedDatabase: activeTabObj.database ?? ac.selectedDatabase,
-    });
-    loadTableTabIntoSignals(activeTabObj);
-  }
-
-  tabStripEl.style.display = "";
-  renderTabStrip();
-  renderActiveTabContent();
 }
 
 // ── Connection state subscription ─────────────────────────────────────────────
@@ -1069,16 +1191,62 @@ async function boot() {
   }
   renderSidebar();
 
-  const session = loadSession();
-  const cfg = session
-    ? appState.connections.value.find((c) => c.id === session.connConfigId)
-    : undefined;
+  const stored = loadSession();
+  const restorable = (stored?.sessions ?? [])
+    .map((s) => ({
+      stored: s,
+      cfg: appState.connections.value.find((c) => c.id === s.connConfigId),
+    }))
+    .filter(
+      (x): x is { stored: StoredConnSession; cfg: ConnectionConfig } => !!x.cfg,
+    );
 
-  if (session && cfg) {
-    await connectToDb(cfg, session);
-  } else {
+  if (restorable.length === 0) {
     renderContentArea();
+    return;
   }
+
+  appState.status.set("Restoring previous session…");
+
+  const results = await Promise.allSettled(
+    restorable.map(async ({ stored: s, cfg }) => {
+      const session = await establishConnSession(cfg);
+      session.selectedDatabase = s.selectedDatabase ?? session.selectedDatabase;
+      session.selectedSchema = s.selectedSchema ?? session.selectedSchema;
+      session.openTabs = remapRestoredTabs(s.tabs, session.connId);
+      session.activeTabId =
+        s.activeTabId && session.openTabs.some((t) => t.id === s.activeTabId)
+          ? s.activeTabId
+          : (session.openTabs[0]?.id ?? null);
+      return session;
+    }),
+  );
+
+  const restoredSessions: ConnSession[] = [];
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") {
+      restoredSessions.push(r.value);
+    } else {
+      console.warn(`Failed to restore connection "${restorable[i]!.cfg.name}":`, r.reason);
+    }
+  });
+
+  if (restoredSessions.length === 0) {
+    clearSession();
+    renderContentArea();
+    return;
+  }
+
+  appState.connSessions.set(restoredSessions);
+
+  const focusTarget =
+    restoredSessions.find((s) => s.config.id === stored?.activeConnConfigId) ??
+    restoredSessions[0]!;
+
+  focusSession(focusTarget);
+  statusDot.className = "status-dot connected";
+  appState.status.set(`Connected: ${focusTarget.config.name}`);
+  activateFocusedSession(focusTarget);
 }
 
 boot();
@@ -1340,7 +1508,7 @@ function closeAllTabs() {
 // one table with different filters). Used from the sidebar when no matching
 // tab already exists.
 function openTableInNewTab(
-  ac: ActiveConnection,
+  ac: ConnSession,
   tableName: string,
   schema?: string,
   database?: string,
@@ -1432,7 +1600,7 @@ function csvCell(val: string): string {
 // target table to build an UPDATE against.
 function inferEditableTarget(
   sqlText: string,
-  ac: ActiveConnection,
+  ac: ConnSession,
 ): { schema?: string; database?: string; table: string } | null {
   const trimmed = sqlText.trim().replace(/;+\s*$/, "");
   if (!/^select\b/i.test(trimmed)) return null;

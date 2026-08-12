@@ -1,16 +1,23 @@
-import type { AppTab } from "./store";
+import type { AppTab, ConnSession } from "./store";
 
 // ── Session persistence ────────────────────────────────────────────────────────
-// Remembers the open tabs (table + query) for the last active connection so
-// they come back after relaunching the app, as long as the user didn't
-// explicitly close them (or disconnect) first.
+// Remembers every open connection (and each one's open tabs) so they come
+// back after relaunching the app, as long the user didn't explicitly close
+// them (or disconnect) first.
 
 const SESSION_KEY = "dbkonn-session";
 
-export interface StoredSession {
+export interface StoredConnSession {
   connConfigId: string;
   activeTabId: string | null;
   tabs: AppTab[];
+  selectedDatabase?: string;
+  selectedSchema?: string;
+}
+
+export interface StoredSession {
+  activeConnConfigId: string | null;
+  sessions: StoredConnSession[];
 }
 
 // Strip heavy/ephemeral fields (result sets, in-progress row edits) before
@@ -27,11 +34,16 @@ function toLightTab(tab: AppTab): AppTab {
   return { ...tab, sqlResult: null };
 }
 
-export function saveSession(connConfigId: string, activeTabId: string | null, tabs: AppTab[]) {
+export function saveSession(sessions: ConnSession[], activeConnConfigId: string | null) {
   const payload: StoredSession = {
-    connConfigId,
-    activeTabId,
-    tabs: tabs.map(toLightTab),
+    activeConnConfigId,
+    sessions: sessions.map((s) => ({
+      connConfigId: s.config.id,
+      activeTabId: s.activeTabId,
+      tabs: s.openTabs.map(toLightTab),
+      selectedDatabase: s.selectedDatabase,
+      selectedSchema: s.selectedSchema,
+    })),
   };
   try {
     localStorage.setItem(SESSION_KEY, JSON.stringify(payload));

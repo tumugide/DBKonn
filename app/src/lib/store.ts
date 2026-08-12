@@ -56,18 +56,6 @@ export const THEMES: Record<ThemeType, ThemeMeta> = {
 
 // ── App State ─────────────────────────────────────────────────────────────────
 
-export interface ActiveConnection {
-  connId: string;
-  config: ConnectionConfig;
-  /** All databases available to this user */
-  databases: string[];
-  selectedDatabase?: string;
-  schemas: SchemaInfo[];
-  selectedSchema?: string;
-  tables: TableInfo[];
-  selectedTable?: string;
-}
-
 export interface TableState {
   result?: QueryResult;
   totalRows: number;
@@ -117,10 +105,40 @@ export interface QueryTab {
 
 export type AppTab = TableTab | QueryTab;
 
+// ── Connection sessions ─────────────────────────────────────────────────────────
+// A ConnSession is one open (connected) database — several can be open at
+// once (TablePlus-style). `id` is a stable identity for the session itself;
+// `connId` is the live IPC handle, which can change (e.g. switchDatabase
+// disconnects and reconnects under the hood).
+
+export interface ConnSession {
+  id: string;
+  connId: string;
+  config: ConnectionConfig;
+  /** All databases available to this user */
+  databases: string[];
+  selectedDatabase?: string;
+  schemas: SchemaInfo[];
+  selectedSchema?: string;
+  tables: TableInfo[];
+  selectedTable?: string;
+  // Per-session tab strip — mirrored to/from the top-level openTabs/activeTab
+  // signals below whenever this session is the focused one.
+  openTabs: AppTab[];
+  activeTabId: string | null;
+}
+
 export const appState = {
   theme: new Signal<ThemeType>("bios"),
   connections: new Signal<ConnectionConfig[]>([]),
-  activeConn: new Signal<ActiveConnection | null>(null),
+  // The focused connection session (mirrors the matching entry in
+  // connSessions — see the sync subscriptions below).
+  activeConn: new Signal<ConnSession | null>(null),
+  // Every currently open connection session, focused or not.
+  connSessions: new Signal<ConnSession[]>([]),
+  activeConnId: new Signal<string | null>(null),
+  // Scratch signals for whichever tab is active in the focused session —
+  // hydrated from / flushed into that tab's own record on every switch.
   tableState: new Signal<TableState>({
     totalRows: 0,
     page: 0,
@@ -133,7 +151,33 @@ export const appState = {
   tableMetadata: new Signal<ColumnInfo[]>([]),
   selectedRecord: new Signal<SelectedRecord | null>(null),
   status: new Signal<string>("Ready"),
+  // The focused session's tab strip — mirrored into connSessions (see below).
   openTabs: new Signal<AppTab[]>([]),
   activeTab: new Signal<string | null>(null),
   filterRules: new Signal<FilterRule[]>([]),
 };
+
+// Keep connSessions in sync with whatever the focused session's live state
+// is, so the connection rail + session persistence always reflect reality
+// without every call site that mutates activeConn/openTabs/activeTab having
+// to know about connSessions too.
+function syncActiveSessionField(id: string | null, updater: (s: ConnSession) => ConnSession) {
+  if (!id) return;
+  const list = appState.connSessions.value;
+  const idx = list.findIndex((s) => s.id === id);
+  if (idx === -1) return;
+  const next = [...list];
+  next[idx] = updater(next[idx]!);
+  appState.connSessions.set(next);
+}
+
+appState.activeConn.subscribe((ac) => {
+  if (!ac) return;
+  syncActiveSessionField(ac.id, (s) => ({ ...ac, openTabs: s.openTabs, activeTabId: s.activeTabId }));
+});
+appState.openTabs.subscribe((tabs) => {
+  syncActiveSessionField(appState.activeConnId.value, (s) => ({ ...s, openTabs: tabs }));
+});
+appState.activeTab.subscribe((tabId) => {
+  syncActiveSessionField(appState.activeConnId.value, (s) => ({ ...s, activeTabId: tabId }));
+});
