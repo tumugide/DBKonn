@@ -17,6 +17,7 @@ import { RecordPanel } from "./components/RecordPanel";
 import { showConnectionModal } from "./components/ConnectionModal";
 import { cloneRowValue } from "./lib/rowEdit";
 import type { RowValue } from "./lib/ipc";
+import { saveSession, loadSession, clearSession, type StoredSession } from "./lib/session";
 
 // ── Theme application ─────────────────────────────────────────────────────────
 
@@ -347,6 +348,7 @@ async function disconnectFromDb() {
   }
   appState.activeConn.set(null);
   resetTabsAndLiveState();
+  clearSession();
   statusDot.className = "status-dot";
   appState.status.set("Disconnected");
   renderSidebar();
@@ -360,6 +362,20 @@ function resetTabsAndLiveState() {
   appState.tableMetadata.set([]);
   appState.selectedRecord.set(null);
   appState.filterRules.set([]);
+}
+
+// Flush the currently-active tab's live state into the tabs array, then
+// write the open tabs + active connection to localStorage so they can be
+// restored on the next launch — unless the tab list is empty, in which case
+// there's nothing worth remembering.
+function persistSessionNow() {
+  persistCurrentTabState();
+  const ac = appState.activeConn.value;
+  if (!ac) {
+    clearSession();
+    return;
+  }
+  saveSession(ac.config.id, appState.activeTab.value, appState.openTabs.value);
 }
 
 // ── Content area (tab strip + active tab body) ─────────────────────────────────
@@ -462,6 +478,33 @@ function renderQueryTabContent(tab: QueryTab) {
     onClose: () => {
       recordPanelEl.classList.remove("open");
       queryRecordPanel.clear();
+    },
+    onRequestEdit: () => {
+      const ac2 = appState.activeConn.value;
+      if (!ac2) return;
+      const target = inferEditableTarget(sqlEditor?.getLastRunText() ?? tab.sqlDoc, ac2);
+      if (!target) {
+        alert(
+          "This query result can't be edited in place — only a simple single-table SELECT supports editing.",
+        );
+        return;
+      }
+      queryRecordPanel.enterEditMode({
+        engine: ac2.config.engine,
+        schema: target.schema,
+        database: target.database,
+        table: target.table,
+        onCommit: async (sql) => {
+          const ac3 = appState.activeConn.value;
+          if (!ac3) return;
+          const result = await ipc.executeQuery(ac3.connId, sql);
+          if (result.error) throw new Error(result.error);
+          appState.status.set(
+            `Updated ${result.affected_rows ?? 1} row(s) · ${result.execution_time_ms}ms`,
+          );
+          void sqlEditor?.run();
+        },
+      });
     },
   });
 
@@ -911,7 +954,7 @@ function showConnectionsScreen() {
 
 // ── Connect to DB ─────────────────────────────────────────────────────────────
 
-async function connectToDb(cfg: ConnectionConfig) {
+async function connectToDb(cfg: ConnectionConfig, restore?: StoredSession) {
   appState.status.set(`Connecting: ${cfg.name}…`);
   statusDot.className = "status-dot";
 
@@ -948,10 +991,22 @@ async function connectToDb(cfg: ConnectionConfig) {
 
     // Fresh connection — ensure clean tab state
     resetTabsAndLiveState();
-
     renderSidebar();
-    // Land on a usable default query tab, like TablePlus does on connect
-    openQueryTab();
+
+    let restored = false;
+    if (restore && restore.tabs.length > 0) {
+      try {
+        restoreSessionTabs(restore);
+        restored = true;
+      } catch (e) {
+        console.warn("Session restore failed, starting fresh:", e);
+        clearSession();
+      }
+    }
+    if (!restored) {
+      // Land on a usable default query tab, like TablePlus does on connect
+      openQueryTab();
+    }
   } catch (e) {
     statusDot.className = "status-dot error";
     appState.status.set(`Error: ${e}`);
@@ -959,10 +1014,48 @@ async function connectToDb(cfg: ConnectionConfig) {
   }
 }
 
+// Re-hydrate a previously-persisted set of open tabs onto a freshly
+// established connection (the connId inside each stored tab is stale — it
+// belonged to the old IPC session — so it's remapped to the new one).
+function restoreSessionTabs(session: StoredSession) {
+  const ac = appState.activeConn.value;
+  if (!ac) return;
+
+  const tabs = session.tabs.map((t) => ({ ...t, connId: ac.connId }));
+  appState.openTabs.set(tabs);
+
+  const activeId =
+    session.activeTabId && tabs.some((t) => t.id === session.activeTabId)
+      ? session.activeTabId
+      : tabs[0]!.id;
+  appState.activeTab.set(activeId);
+
+  const activeTabObj = tabs.find((t) => t.id === activeId)!;
+  if (activeTabObj.kind === "table") {
+    appState.activeConn.set({
+      ...ac,
+      selectedTable: activeTabObj.name,
+      selectedSchema: activeTabObj.schema ?? ac.selectedSchema,
+      selectedDatabase: activeTabObj.database ?? ac.selectedDatabase,
+    });
+    loadTableTabIntoSignals(activeTabObj);
+  }
+
+  tabStripEl.style.display = "";
+  renderTabStrip();
+  renderActiveTabContent();
+}
+
 // ── Connection state subscription ─────────────────────────────────────────────
 
 appState.connections.subscribe(() => {
   if (!appState.activeConn.value) renderSidebar();
+});
+
+// Flush the active tab's live state to storage on the way out — covers
+// edits (typed SQL, filters) that haven't triggered a tab switch yet.
+window.addEventListener("beforeunload", () => {
+  persistSessionNow();
 });
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
@@ -975,7 +1068,17 @@ async function boot() {
     console.error("Boot error:", e);
   }
   renderSidebar();
-  renderContentArea();
+
+  const session = loadSession();
+  const cfg = session
+    ? appState.connections.value.find((c) => c.id === session.connConfigId)
+    : undefined;
+
+  if (session && cfg) {
+    await connectToDb(cfg, session);
+  } else {
+    renderContentArea();
+  }
 }
 
 boot();
@@ -1167,6 +1270,7 @@ function switchToTab(tabId: string) {
 
   renderTabStrip();
   renderActiveTabContent();
+  persistSessionNow();
 }
 
 function closeTab(tabId: string) {
@@ -1220,6 +1324,7 @@ function closeTab(tabId: string) {
   }
 
   renderTabStrip();
+  persistSessionNow();
 }
 
 function closeAllTabs() {
@@ -1228,6 +1333,7 @@ function closeAllTabs() {
   if (ac) appState.activeConn.set({ ...ac, selectedTable: undefined });
   renderActiveTabContent();
   renderTabStrip();
+  persistSessionNow();
 }
 
 // Always create a brand new table tab (allows duplicates — e.g. two views of
@@ -1273,6 +1379,7 @@ function openTableInNewTab(
 
   renderTabStrip();
   renderActiveTabContent();
+  persistSessionNow();
 }
 
 // Creates a new blank SQL query tab. Used by the tab-strip "+" button, the
@@ -1299,6 +1406,7 @@ function openQueryTab() {
   tabStripEl.style.display = "";
   renderTabStrip();
   renderActiveTabContent();
+  persistSessionNow();
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
@@ -1315,4 +1423,31 @@ function csvCell(val: string): string {
     return `"${val.replace(/"/g, '""')}"`;
   }
   return val;
+}
+
+// Best-effort detection of "this query is really just browsing one table",
+// so the read-only query-result panel can offer in-place editing. Bails out
+// (returns null) on anything that isn't a plain single-table SELECT — joins,
+// comma'd FROM lists, subqueries, etc. — since there's no reliable single
+// target table to build an UPDATE against.
+function inferEditableTarget(
+  sqlText: string,
+  ac: ActiveConnection,
+): { schema?: string; database?: string; table: string } | null {
+  const trimmed = sqlText.trim().replace(/;+\s*$/, "");
+  if (!/^select\b/i.test(trimmed)) return null;
+  if (/\bjoin\b/i.test(trimmed)) return null;
+
+  const m = trimmed.match(/\bfrom\s+([`"[\]\w.]+)/i);
+  if (!m) return null;
+
+  let raw = m[1]!;
+  if (raw.includes(",")) return null;
+  raw = raw.replace(/[`"[\]]/g, "");
+
+  const parts = raw.split(".");
+  if (parts.length === 2) {
+    return { schema: parts[0], database: ac.selectedDatabase, table: parts[1]! };
+  }
+  return { schema: ac.selectedSchema, database: ac.selectedDatabase, table: parts[0]! };
 }

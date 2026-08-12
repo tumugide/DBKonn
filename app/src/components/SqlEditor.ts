@@ -444,6 +444,7 @@ export class SqlEditor {
   private errorEl!: HTMLElement;
   private lastDoc = "SELECT 1;\n";
   private lastResult: QueryResult | null = null;
+  private lastRunText = "";
   private opts: SqlEditorOptions;
   private unsubTheme?: () => void;
 
@@ -466,6 +467,12 @@ export class SqlEditor {
 
   getLastResult(): QueryResult | null {
     return this.lastResult;
+  }
+
+  /** The SQL text that produced the current results (may differ from the
+   * live editor content if it's since been edited without re-running). */
+  getLastRunText(): string {
+    return this.lastRunText;
   }
 
   destroy() {
@@ -625,7 +632,7 @@ export class SqlEditor {
     this.view = new EditorView({ state, parent });
   }
 
-  private async run() {
+  async run() {
     if (!this.connId || !this.config) {
       this.setError("No active connection. Connect first.");
       return;
@@ -652,6 +659,7 @@ export class SqlEditor {
     try {
       const result = await ipc.executeQuery(this.connId, sqlText);
       this.lastResult = result;
+      this.lastRunText = sqlText;
       this.opts.onBeforeNewResult?.();
 
       if (result.error) {

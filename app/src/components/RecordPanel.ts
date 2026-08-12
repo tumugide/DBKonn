@@ -26,6 +26,8 @@ export interface RecordPanelOptions {
   onClose: () => void;
   /** View-only mode: no editing, no NULL toggle, no Save/Revert toolbar. */
   readOnly?: boolean;
+  /** Shown as an "Edit" button in read-only mode. */
+  onRequestEdit?: () => void;
 }
 
 function formatDisplayValue(val: RowValue): string {
@@ -91,6 +93,25 @@ export class RecordPanel {
 
   getRecord(): SelectedRecord | null {
     return this.record;
+  }
+
+  // Upgrades a read-only panel into an editable one targeting a specific
+  // table, without losing the currently displayed row.
+  enterEditMode(ctx: {
+    engine: DbEngine;
+    schema?: string;
+    database?: string;
+    table: string;
+    onCommit: (sql: string) => Promise<void>;
+  }) {
+    this.opts.engine = ctx.engine;
+    this.opts.schema = ctx.schema;
+    this.opts.database = ctx.database;
+    this.opts.table = ctx.table;
+    this.opts.onCommit = ctx.onCommit;
+    this.opts.readOnly = false;
+    this.errorMsg = "";
+    this.render();
   }
 
   private renderEmpty() {
@@ -196,6 +217,7 @@ export class RecordPanel {
         <span class="record-panel-title">Record</span>
         ${ro ? '<span class="record-dirty-badge record-readonly-badge">Read-only</span>' : ""}
         ${!ro && dirty ? '<span class="record-dirty-badge">Modified</span>' : ""}
+        ${ro && this.opts.onRequestEdit ? '<button class="btn-icon" id="rp-edit" title="Edit this row">Edit</button>' : ""}
         <button class="btn-icon" id="rp-close" title="Close">✕</button>
       </div>
       ${
@@ -219,6 +241,10 @@ export class RecordPanel {
   }
 
   private wireEvents() {
+    document.getElementById("rp-edit")?.addEventListener("click", () => {
+      this.opts.onRequestEdit?.();
+    });
+
     document.getElementById("rp-close")?.addEventListener("click", () => {
       if (this.record?.dirty) {
         if (!confirm("Discard unsaved changes?")) return;
