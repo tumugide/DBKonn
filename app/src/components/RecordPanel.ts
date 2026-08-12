@@ -24,6 +24,8 @@ export interface RecordPanelOptions {
   onCommit: (sql: string) => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
   onClose: () => void;
+  /** View-only mode: no editing, no NULL toggle, no Save/Revert toolbar. */
+  readOnly?: boolean;
 }
 
 function formatDisplayValue(val: RowValue): string {
@@ -94,7 +96,7 @@ export class RecordPanel {
   private renderEmpty() {
     this.container.innerHTML = `
       <div class="record-panel-empty">
-        <span>SELECT A ROW</span>
+        <span>No row selected</span>
         <span class="record-panel-hint">Click a row in the grid to view and edit</span>
       </div>`;
   }
@@ -106,11 +108,13 @@ export class RecordPanel {
     }
 
     const { draft, dirty } = this.record;
+    const ro = this.opts.readOnly ?? false;
     const fields = this.columns
       .map((col, idx) => {
         const val = draft[idx] ?? null;
         const isNull = val === null;
         const isPk = col.is_primary_key;
+        const disabled = ro || isPk || isNull;
         const temporal = getTemporalKind(col.data_type);
         const useNow = isNowValue(val);
         const typeHint =
@@ -122,57 +126,58 @@ export class RecordPanel {
         if (col.enum_values && col.enum_values.length > 0) {
           inputHtml = `
             <select class="record-field-input" data-idx="${idx}" data-kind="enum"
-              ${isPk || isNull ? "disabled" : ""}>
+              ${disabled ? "disabled" : ""}>
               ${enumOptions(col, val)}
             </select>`;
         } else if (temporal === "date") {
           inputHtml = `
             <input class="record-field-input" data-idx="${idx}" data-kind="date" type="date"
               value="${esc(toDateInputValue(val))}"
-              ${isPk || isNull ? "disabled" : ""} />`;
+              ${disabled ? "disabled" : ""} />`;
         } else if (temporal === "timestamp") {
           inputHtml = `
             <div class="record-datetime-row" data-idx="${idx}">
               <input class="record-field-input" data-idx="${idx}" data-kind="datetime" type="datetime-local"
                 step="1"
                 value="${esc(toDateTimeLocalValue(val))}"
-                ${isPk || isNull || useNow ? "disabled" : ""} />
-              <button type="button" class="btn btn-secondary record-now-btn${useNow ? " active" : ""}"
-                data-idx="${idx}" ${isPk || isNull ? "disabled" : ""}>NOW()</button>
+                ${disabled || useNow ? "disabled" : ""} />
+              ${ro ? "" : `<button type="button" class="btn btn-secondary record-now-btn${useNow ? " active" : ""}"
+                data-idx="${idx}" ${disabled ? "disabled" : ""}>NOW()</button>`}
             </div>`;
         } else if (temporal === "time") {
           inputHtml = `
             <input class="record-field-input" data-idx="${idx}" data-kind="time" type="time"
               step="1"
               value="${esc(toTimeInputValue(val))}"
-              ${isPk || isNull ? "disabled" : ""} />`;
+              ${disabled ? "disabled" : ""} />`;
         } else if (typeof val === "boolean") {
           inputHtml = `
-            <select class="record-field-input" data-idx="${idx}" data-kind="boolean" ${isPk ? "disabled" : ""}>
+            <select class="record-field-input" data-idx="${idx}" data-kind="boolean" ${ro || isPk ? "disabled" : ""}>
               <option value="true" ${val ? "selected" : ""}>true</option>
               <option value="false" ${!val ? "selected" : ""}>false</option>
             </select>`;
         } else if (typeof val === "object" && val !== null) {
           inputHtml = `
             <textarea class="record-field-input record-field-json" data-idx="${idx}"
-              rows="3" ${isPk || isNull ? "disabled" : ""}>${esc(formatDisplayValue(val))}</textarea>`;
+              rows="3" ${disabled ? "disabled" : ""}>${esc(formatDisplayValue(val))}</textarea>`;
         } else if (typeof val === "number") {
           inputHtml = `
             <input class="record-field-input" data-idx="${idx}" type="text"
               value="${esc(formatDisplayValue(val))}"
-              ${isPk || isNull ? "disabled" : ""} />`;
+              ${disabled ? "disabled" : ""} />`;
         } else {
           inputHtml = `
             <textarea class="record-field-input record-field-text" data-idx="${idx}"
-              rows="1" ${isPk || isNull ? "disabled" : ""}>${esc(formatDisplayValue(val))}</textarea>`;
+              rows="1" ${disabled ? "disabled" : ""}>${esc(formatDisplayValue(val))}</textarea>`;
         }
 
-        const nullCheck = col.nullable
-          ? `<label class="record-null-check">
+        const nullCheck =
+          !ro && col.nullable
+            ? `<label class="record-null-check">
               <input type="checkbox" class="record-null-toggle" data-idx="${idx}"
                 ${isNull ? "checked" : ""} ${isPk ? "disabled" : ""} /> NULL
             </label>`
-          : "";
+            : "";
 
         return `
           <div class="record-field ${isPk ? "record-field-pk" : ""}">
@@ -188,14 +193,19 @@ export class RecordPanel {
 
     this.container.innerHTML = `
       <div class="record-panel-header">
-        <span class="record-panel-title">RECORD VIEW</span>
-        ${dirty ? '<span class="record-dirty-badge">MODIFIED</span>' : ""}
-        <button class="btn-icon" id="rp-close" title="Close">X</button>
+        <span class="record-panel-title">Record</span>
+        ${ro ? '<span class="record-dirty-badge record-readonly-badge">Read-only</span>' : ""}
+        ${!ro && dirty ? '<span class="record-dirty-badge">Modified</span>' : ""}
+        <button class="btn-icon" id="rp-close" title="Close">✕</button>
       </div>
-      <div class="record-panel-toolbar">
-        <button class="btn btn-primary" id="rp-commit" ${dirty ? "" : "disabled"}>[COMMIT]</button>
-        <button class="btn btn-secondary" id="rp-rollback" ${dirty ? "" : "disabled"}>[ROLLBACK]</button>
-      </div>
+      ${
+        ro
+          ? ""
+          : `<div class="record-panel-toolbar">
+        <button class="btn btn-primary" id="rp-commit" ${dirty ? "" : "disabled"}>Save</button>
+        <button class="btn btn-secondary" id="rp-rollback" ${dirty ? "" : "disabled"}>Revert</button>
+      </div>`
+      }
       ${this.errorMsg ? `<div class="error-banner record-panel-error">${esc(this.errorMsg)}</div>` : ""}
       <div class="record-panel-fields">${fields}</div>
     `;
@@ -351,7 +361,7 @@ export class RecordPanel {
       const title = this.container.querySelector(".record-panel-title");
       title?.insertAdjacentHTML(
         "afterend",
-        '<span class="record-dirty-badge">MODIFIED</span>',
+        '<span class="record-dirty-badge">Modified</span>',
       );
     } else if (!dirty && badge) {
       badge.remove();

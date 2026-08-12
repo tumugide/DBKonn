@@ -77,6 +77,7 @@ export class FilterBar {
       const addBtn = document.createElement("button");
       addBtn.className = "btn btn-secondary";
       addBtn.textContent = "+ Add Filter";
+      addBtn.title = "Add filter rule";
       addBtn.onclick = () => {
         const col = this.columns[0]?.name ?? "id";
         this.rules.push(newRule(col));
@@ -190,7 +191,7 @@ export class FilterBar {
 
     const applyBtn = document.createElement("button");
     applyBtn.className = "btn btn-primary";
-    applyBtn.textContent = "[APPLY FILTER]";
+    applyBtn.textContent = "Apply";
     applyBtn.onclick = () => this.apply();
     this.container.appendChild(applyBtn);
 

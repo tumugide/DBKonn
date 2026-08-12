@@ -29,7 +29,7 @@ export function showConnectionModal(
 
   overlay.innerHTML = `
     <div class="modal">
-      <div class="modal-title">${isEdit ? "EDIT" : "NEW"} CONNECTION</div>
+      <div class="modal-title">${isEdit ? "Edit" : "New"} Connection</div>
       <div class="modal-body">
 
         <div class="form-row">
@@ -77,9 +77,9 @@ export function showConnectionModal(
           <div class="form-row">
             <label>SSL Mode</label>
             <select id="cm-ssl" style="width:100%">
-              <option value="prefer"  ${initial.ssl_mode === "prefer" ? "selected" : ""}>PREFER</option>
-              <option value="require" ${initial.ssl_mode === "require" ? "selected" : ""}>REQUIRE</option>
-              <option value="disable" ${initial.ssl_mode === "disable" ? "selected" : ""}>DISABLE</option>
+              <option value="prefer"  ${initial.ssl_mode === "prefer" ? "selected" : ""}>Prefer</option>
+              <option value="require" ${initial.ssl_mode === "require" ? "selected" : ""}>Require</option>
+              <option value="disable" ${initial.ssl_mode === "disable" ? "selected" : ""}>Disable</option>
             </select>
           </div>
         </div>
@@ -96,9 +96,9 @@ export function showConnectionModal(
 
       </div>
       <div class="modal-actions">
-        <button class="btn btn-secondary" id="cm-test">TEST CONN</button>
-        <button class="btn btn-secondary" id="cm-cancel">CANCEL</button>
-        <button class="btn btn-primary" id="cm-save">SAVE</button>
+        <button class="btn btn-secondary" id="cm-test">Test Connection</button>
+        <button class="btn btn-secondary" id="cm-cancel">Cancel</button>
+        <button class="btn btn-primary" id="cm-save">Save</button>
       </div>
     </div>
   `;
@@ -160,19 +160,19 @@ export function showConnectionModal(
   }
 
   overlay.querySelector("#cm-test")!.addEventListener("click", async () => {
-    setStatus("TESTING CONNECTION...", "color:var(--text-muted)");
+    setStatus("Testing connection…", "color:var(--text-muted)");
     try {
       await ipc.testConnection(buildConfig());
-      setStatus("[ OK ] CONNECTION SUCCESSFUL", "color:var(--accent-green)");
+      setStatus("✓ Connection successful", "color:var(--accent-green)");
     } catch (e) {
-      setStatus(`[ !! ] ${e}`, "color:var(--accent-amber)");
+      setStatus(`⚠ ${e}`, "color:var(--accent-amber)");
     }
   });
 
   overlay.querySelector("#cm-save")!.addEventListener("click", async () => {
     const cfg = buildConfig();
     if (!cfg.name) {
-      setStatus("NAME IS REQUIRED", "color:var(--accent-amber)");
+      setStatus("Name is required", "color:var(--accent-amber)");
       return;
     }
     try {
@@ -182,7 +182,7 @@ export function showConnectionModal(
       overlay.remove();
       onSaved?.();
     } catch (e) {
-      setStatus(`ERROR: ${e}`, "color:var(--accent-red)");
+      setStatus(`Error: ${e}`, "color:var(--accent-red)");
     }
   });
 

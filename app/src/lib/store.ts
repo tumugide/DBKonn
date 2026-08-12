@@ -45,18 +45,16 @@ export interface ThemeMeta {
 }
 
 export const THEMES: Record<ThemeType, ThemeMeta> = {
-  bios:       { label: "BIOS",        icon: "\u25CF" },
-  monokai:    { label: "MONOKAI",     icon: "\u25CF" },
-  dark:       { label: "DARK",        icon: "\u25CF" },
-  light:      { label: "LIGHT",       icon: "\u25CB" },
-  catppuccin: { label: "CATPPUCCIN",  icon: "\u25CF" },
-  "ayu-dark": { label: "AYU DARK",    icon: "\u25CF" },
-  "ayu-light":{ label: "AYU LIGHT",   icon: "\u25CB" },
+  bios:       { label: "BIOS",        icon: "●" },
+  monokai:    { label: "Monokai",     icon: "●" },
+  dark:       { label: "Dark",        icon: "●" },
+  light:      { label: "Light",       icon: "○" },
+  catppuccin: { label: "Catppuccin",  icon: "●" },
+  "ayu-dark": { label: "Ayu Dark",    icon: "●" },
+  "ayu-light":{ label: "Ayu Light",   icon: "○" },
 };
 
 // ── App State ─────────────────────────────────────────────────────────────────
-
-export type MainView = "table" | "sql" | "connections";
 
 export interface ActiveConnection {
   connId: string;
@@ -68,19 +66,6 @@ export interface ActiveConnection {
   selectedSchema?: string;
   tables: TableInfo[];
   selectedTable?: string;
-}
-
-export interface OpenTableTab {
-  id: string;
-  name: string;
-  schema?: string;
-  database?: string;
-  connId: string;
-  // Per-tab state — preserved when switching between tabs
-  tableState: TableState;
-  tableMetadata: ColumnInfo[];
-  selectedRecord: SelectedRecord | null;
-  filterRules: FilterRule[];
 }
 
 export interface TableState {
@@ -103,11 +88,39 @@ export interface SelectedRecord {
   dirty: boolean;
 }
 
+// ── Unified tab model ─────────────────────────────────────────────────────────
+// Every open table or SQL query is a tab in one strip (TablePlus-style).
+
+export interface TableTab {
+  id: string;
+  kind: "table";
+  name: string;
+  schema?: string;
+  database?: string;
+  connId: string;
+  // Per-tab state — preserved when switching between tabs
+  tableState: TableState;
+  tableMetadata: ColumnInfo[];
+  selectedRecord: SelectedRecord | null;
+  filterRules: FilterRule[];
+}
+
+export interface QueryTab {
+  id: string;
+  kind: "query";
+  title: string;
+  connId: string;
+  // Per-tab state — preserved when switching between tabs
+  sqlDoc: string;
+  sqlResult: QueryResult | null;
+}
+
+export type AppTab = TableTab | QueryTab;
+
 export const appState = {
   theme: new Signal<ThemeType>("bios"),
   connections: new Signal<ConnectionConfig[]>([]),
   activeConn: new Signal<ActiveConnection | null>(null),
-  mainView: new Signal<MainView>("connections"),
   tableState: new Signal<TableState>({
     totalRows: 0,
     page: 0,
@@ -119,11 +132,8 @@ export const appState = {
   }),
   tableMetadata: new Signal<ColumnInfo[]>([]),
   selectedRecord: new Signal<SelectedRecord | null>(null),
-  sqlResult: new Signal<QueryResult | null>(null),
-  sqlLoading: new Signal<boolean>(false),
-  sqlError: new Signal<string | null>(null),
-  status: new Signal<string>("READY"),
-  openTableTabs: new Signal<OpenTableTab[]>([]),
-  activeTableTab: new Signal<string | null>(null),
+  status: new Signal<string>("Ready"),
+  openTabs: new Signal<AppTab[]>([]),
+  activeTab: new Signal<string | null>(null),
   filterRules: new Signal<FilterRule[]>([]),
 };

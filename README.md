@@ -10,8 +10,22 @@ Pre-built for **macOS on Apple Silicon** (M1/M2/M3/M4):
 
 **[Download DBKonn v0.1.0 — Apple Silicon (.dmg)](appbuilds/DBKonn_0.1.0_aarch64.dmg)**
 
+**Option A — Install script (recommended):**
+
+```bash
+./install.sh
+```
+
+This mounts the `.dmg`, copies DBKonn to `/Applications`, and removes the quarantine attribute so Gatekeeper won't block it.
+
+**Option B — Manual install:**
+
 1. Open the `.dmg` and drag **DBKonn** into Applications.
-2. On first launch, macOS may block the app because it is not notarized. Open **System Settings → Privacy & Security** and click **Open Anyway**, or right-click the app and choose **Open**.
+2. If macOS says the app is "damaged and can't be opened", right-click the app and choose **Open**, or run:
+   ```bash
+   xattr -cr /Applications/DBKonn.app
+   ```
+   Then open it normally.
 
 > Intel Macs and Linux/Windows builds are not included yet. See [Build from source](#build-from-source) below.
 
@@ -37,7 +51,8 @@ DBKonn/
 │   └── src-tauri/    # Tauri commands and IPC
 ├── core/             # Shared Rust database layer (dbkonn-core)
 ├── cli/              # dbctl command-line tool
-└── appbuilds/        # Pre-built macOS installers
+├── appbuilds/        # Pre-built macOS installers
+└── install.sh        # One-command installer (handles Gatekeeper bypass)
 ```
 
 ## Build from source

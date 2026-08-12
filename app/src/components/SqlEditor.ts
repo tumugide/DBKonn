@@ -6,7 +6,7 @@ import { autocompletion, completionKeymap } from "@codemirror/autocomplete";
 import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 
-import { ipc, type ConnectionConfig, type ColumnInfo } from "../lib/ipc";
+import { ipc, type ConnectionConfig, type ColumnInfo, type QueryResult, type RowValue } from "../lib/ipc";
 import { appState, type ThemeType } from "../lib/store";
 import { DataGrid } from "./DataGrid";
 
@@ -425,6 +425,14 @@ const DIALECT_MAP = {
 
 // ── SqlEditor component ───────────────────────────────────────────────────────
 
+export interface SqlEditorOptions {
+  initialDoc?: string;
+  initialResult?: QueryResult | null;
+  onRowClick?: (row: RowValue[], rowIndex: number, columns: ColumnInfo[]) => void;
+  /** Called just before a fresh result set replaces the current one. */
+  onBeforeNewResult?: () => void;
+}
+
 export class SqlEditor {
   private container: HTMLElement;
   private view?: EditorView;
@@ -435,16 +443,29 @@ export class SqlEditor {
   private statusEl!: HTMLElement;
   private errorEl!: HTMLElement;
   private lastDoc = "SELECT 1;\n";
+  private lastResult: QueryResult | null = null;
+  private opts: SqlEditorOptions;
   private unsubTheme?: () => void;
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, opts: SqlEditorOptions = {}) {
     this.container = container;
+    this.opts = opts;
+    if (opts.initialDoc) this.lastDoc = opts.initialDoc;
+    this.lastResult = opts.initialResult ?? null;
     this.buildLayout();
     this.unsubTheme = appState.theme.subscribe(() => {
       const parent = this.view?.dom.parentElement;
       if (!parent) return;
       this.buildEditor(parent, (this.config?.engine ?? "postgres") as keyof typeof DIALECT_MAP);
     });
+  }
+
+  getDoc(): string {
+    return this.view ? this.view.state.doc.toString() : this.lastDoc;
+  }
+
+  getLastResult(): QueryResult | null {
+    return this.lastResult;
   }
 
   destroy() {
@@ -463,12 +484,13 @@ export class SqlEditor {
 
     const runBtn = document.createElement("button");
     runBtn.className = "btn btn-primary";
-    runBtn.textContent = "[RUN] CMD+ENTER";
+    runBtn.innerHTML = "▶ Run";
+    runBtn.title = "Run query (⌘⏎)";
     runBtn.onclick = () => this.run();
 
     this.statusEl = document.createElement("span");
     this.statusEl.style.cssText =
-      "font-size:11px;color:var(--text-muted);flex:1;letter-spacing:0.05em;";
+      "font-size:11px;color:var(--text-muted);flex:1;";
 
     toolbar.appendChild(runBtn);
     toolbar.appendChild(this.statusEl);
@@ -500,7 +522,19 @@ export class SqlEditor {
     this.grid = new DataGrid({
       container: this.resultContainer,
       onHeaderClick: () => {},
+      onRowClick: (row, rowIndex) => {
+        this.grid?.setSelectedRow(rowIndex);
+        this.opts.onRowClick?.(row, rowIndex, this.lastResult?.columns ?? []);
+      },
     });
+    if (this.lastResult) {
+      this.grid.setData(this.lastResult);
+      const label =
+        this.lastResult.affected_rows !== undefined
+          ? `${this.lastResult.affected_rows} rows affected`
+          : `${this.lastResult.row_count} rows returned`;
+      this.statusEl.textContent = `${label} in ${this.lastResult.execution_time_ms}ms`;
+    }
     this.buildEditor(editorPane, "postgres");
   }
 
@@ -593,7 +627,7 @@ export class SqlEditor {
 
   private async run() {
     if (!this.connId || !this.config) {
-      this.setError("NO ACTIVE CONNECTION. CONNECT FIRST.");
+      this.setError("No active connection. Connect first.");
       return;
     }
 
@@ -601,24 +635,24 @@ export class SqlEditor {
     if (!sqlText.trim()) return;
 
     this.errorEl.style.display = "none";
-    this.setStatus("VALIDATING...");
+    this.setStatus("Validating…");
 
     try {
       const parseErr = await ipc.validateSql(this.config, sqlText);
       if (parseErr) {
-        this.setError(`PARSE ERROR: ${parseErr.message}`);
+        this.setError(`Parse error: ${parseErr.message}`);
         return;
       }
     } catch {
       /* validation is best-effort */
     }
 
-    this.setStatus("EXECUTING...");
-    appState.sqlLoading.set(true);
+    this.setStatus("Running…");
 
     try {
       const result = await ipc.executeQuery(this.connId, sqlText);
-      appState.sqlResult.set(result);
+      this.lastResult = result;
+      this.opts.onBeforeNewResult?.();
 
       if (result.error) {
         this.setError(result.error);
@@ -627,14 +661,12 @@ export class SqlEditor {
         this.grid?.setData(result);
         const label =
           result.affected_rows !== undefined
-            ? `${result.affected_rows} ROWS AFFECTED`
-            : `${result.row_count} ROWS RETURNED`;
-        this.setStatus(`OK: ${label} IN ${result.execution_time_ms}ms`);
+            ? `${result.affected_rows} rows affected`
+            : `${result.row_count} rows returned`;
+        this.setStatus(`${label} in ${result.execution_time_ms}ms`);
       }
     } catch (e) {
       this.setError(String(e));
-    } finally {
-      appState.sqlLoading.set(false);
     }
   }
 
@@ -655,7 +687,6 @@ export class SqlEditor {
   private setError(msg: string) {
     this.errorEl.textContent = msg;
     this.errorEl.style.display = "";
-    this.setStatus("ERROR");
-    appState.sqlError.set(msg);
+    this.setStatus("Error");
   }
 }

@@ -1,6 +1,15 @@
 import "./styles/global.css";
 import { ipc, type ConnectionConfig, type ColumnInfo } from "./lib/ipc";
-import { appState, type MainView, type ThemeType, type OpenTableTab, type TableState, type ActiveConnection, THEMES } from "./lib/store";
+import {
+  appState,
+  type ThemeType,
+  type ActiveConnection,
+  type AppTab,
+  type TableTab,
+  type QueryTab,
+  type TableState,
+  THEMES,
+} from "./lib/store";
 import { DataGrid } from "./components/DataGrid";
 import { FilterBar } from "./components/FilterBar";
 import { SqlEditor } from "./components/SqlEditor";
@@ -35,10 +44,10 @@ function showAppearanceModal() {
 
   overlay.innerHTML = `
     <div class="modal">
-      <div class="modal-title">[ APPEARANCE ]</div>
+      <div class="modal-title">Appearance</div>
       <div class="modal-body">
-        <p style="font-size:11px;color:var(--text-muted);margin-bottom:12px;letter-spacing:0.05em;">
-          SELECT THEME
+        <p style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">
+          Select a theme
         </p>
         <div class="theme-grid">
           ${themeKeys.map((key) => {
@@ -47,13 +56,13 @@ function showAppearanceModal() {
             return `<button class="theme-option${active}" data-theme-key="${key}">
               <span class="dot" style="background:var(--accent)"></span>
               ${meta.label}
-              ${active ? '<span class="current-badge">CURRENT</span>' : ""}
+              ${active ? '<span class="current-badge">Current</span>' : ""}
             </button>`;
           }).join("")}
         </div>
       </div>
       <div class="modal-actions">
-        <button class="btn btn-secondary" id="am-close">CLOSE</button>
+        <button class="btn btn-secondary" id="am-close">Close</button>
       </div>
     </div>
   `;
@@ -81,15 +90,9 @@ const app = document.getElementById("app")!;
 
 app.innerHTML = `
   <div class="titlebar">
-    <div class="window-controls"></div>
-    <span class="title">&gt;&gt; DBKONN v0.1</span>
     <div class="titlebar-spacer"></div>
-    <div class="titlebar-center">
-      <button class="view-btn" id="btn-view-sql" data-view="sql">[ SQL ]</button>
-      <button class="view-btn" id="btn-view-connections" data-view="connections">[ CONNECTIONS ]</button>
-    </div>
-    <div class="titlebar-spacer"></div>
-    <button class="btn-icon" id="btn-appearance" title="Appearance settings" style="border:none;font-size:12px;">[THEME]</button>
+    <button class="btn-icon" id="btn-new-query" title="New query (⌘T)">+ Query</button>
+    <button class="btn-icon" id="btn-appearance" title="Appearance settings">Theme</button>
   </div>
   <div class="app-layout">
     <aside class="sidebar" id="sidebar"></aside>
@@ -100,10 +103,8 @@ app.innerHTML = `
   </div>
   <div class="status-bar">
     <div class="status-dot" id="status-dot"></div>
-    <button class="view-btn" id="btn-view-data" data-view="table">[ DATA ]</button>
-    <span id="status-text">READY</span>
-    <span id="theme-label" style="margin-left:auto;cursor:pointer;color:var(--text-muted);letter-spacing:0.06em;font-weight:700;" title="Click to change theme"></span>
-    <span style="margin-left:8px;color:var(--text-faint)">DBKonn © 2025</span>
+    <span id="status-text">Ready</span>
+    <span id="theme-label" style="margin-left:auto;cursor:pointer;color:var(--text-muted);" title="Click to change theme"></span>
   </div>
 `;
 
@@ -113,10 +114,11 @@ const mainContent = document.getElementById("tab-content-area")!;
 const statusText = document.getElementById("status-text")!;
 const statusDot = document.getElementById("status-dot")!;
 const themeLabel = document.getElementById("theme-label")!;
-const tableTabsList = document.getElementById("table-tabs-list")!;
+const tabStripEl = document.getElementById("table-tabs-list")!;
+const newQueryBtn = document.getElementById("btn-new-query") as HTMLButtonElement;
 
 appState.status.subscribe((s) => {
-  statusText.textContent = s.toUpperCase();
+  statusText.textContent = s;
 });
 
 // ── Theme: apply on boot, listen for changes ──────────────────────────────────
@@ -128,31 +130,11 @@ appState.theme.subscribe(applyTheme);
 document.getElementById("btn-appearance")!.addEventListener("click", showAppearanceModal);
 themeLabel.addEventListener("click", showAppearanceModal);
 
-// ── View switchers (SQL / Connections in titlebar, DATA in status bar) ─────────
-function setActiveView(view: MainView) {
-  document.querySelectorAll(".view-btn").forEach((btn) => {
-    const v = (btn as HTMLElement).dataset["view"];
-    btn.classList.toggle("active", v === view);
-  });
-}
-
-function switchView(view: MainView) {
-  appState.mainView.set(view);
-  renderMainView(view);
-}
-
-document.querySelectorAll(".view-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    const view = (btn as HTMLElement).dataset["view"] as MainView;
-    switchView(view);
-  });
+newQueryBtn.addEventListener("click", () => openQueryTab());
+appState.activeConn.subscribe((ac) => {
+  newQueryBtn.disabled = !ac;
 });
-
-appState.mainView.subscribe((v) => setActiveView(v));
-setActiveView(appState.mainView.value);
-
-// ── Table-tab controls (+ / close-all) ─────────────────────────────────────────
-// Wired inside renderTableTabs() since the strip is re-rendered.
+newQueryBtn.disabled = !appState.activeConn.value;
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 
@@ -162,11 +144,10 @@ function renderSidebar() {
 
   if (ac) {
     // ── Connected mode ─────────────────────────────────────────────────────
-    const eng = ac.config.engine.toUpperCase().slice(0, 2);
     buf.push(`
       <div class="sidebar-header connected">
-        <span>[${eng}] ${esc(ac.config.name)}</span>
-        <button class="btn-icon danger" id="sb-disconnect" title="Disconnect">QUIT</button>
+        <span>${esc(ac.config.name)}</span>
+        <button class="btn-icon danger" id="sb-disconnect" title="Disconnect">Quit</button>
       </div>
       <div class="db-controls">
     `);
@@ -197,7 +178,7 @@ function renderSidebar() {
         .join("");
       buf.push(`
         <div class="db-control-row">
-          <label>SCH</label>
+          <label>Schema</label>
           <select id="sb-schema-select">${schemas}</select>
         </div>
       `);
@@ -206,7 +187,7 @@ function renderSidebar() {
     buf.push(`</div>`);
 
     // Table tree
-    buf.push(`<div class="tree-header">TABLES [${ac.tables.length}]</div>`);
+    buf.push(`<div class="tree-header">Tables <span class="tree-count">${ac.tables.length}</span></div>`);
     buf.push(`<div style="flex:1;overflow-y:auto;">`);
     ac.tables.forEach((t) => {
       const active = t.name === ac.selectedTable ? " active" : "";
@@ -219,8 +200,8 @@ function renderSidebar() {
     // ── Disconnected mode ──────────────────────────────────────────────────
     buf.push(`
       <div class="sidebar-header">
-        <span>CONNECTIONS</span>
-        <button class="btn-icon" id="sb-new-conn">+</button>
+        <span>Connections</span>
+        <button class="btn-icon" id="sb-new-conn" title="New connection">+</button>
       </div>
       <div class="conn-list" id="sb-conn-list"></div>
     `);
@@ -269,7 +250,7 @@ function renderConnList() {
   listEl.innerHTML = "";
   if (conns.length === 0) {
     listEl.innerHTML = `<div style="padding:12px 8px;color:var(--text-faint);font-size:11px;">
-      No connections.<br>Press [+] to add one.
+      No connections yet.<br>Press + to add one.
     </div>`;
     return;
   }
@@ -325,17 +306,11 @@ async function switchDatabase(dbName: string) {
     statusDot.className = "status-dot connected";
     appState.status.set(`Connected: ${newConfig.name} / ${dbName}`);
     // The connection was replaced — existing tabs reference the old connId
-    appState.openTableTabs.set([]);
-    appState.activeTableTab.set(null);
-    appState.tableState.set(freshTableState());
-    appState.tableMetadata.set([]);
-    appState.selectedRecord.set(null);
-    appState.filterRules.set([]);
+    resetTabsAndLiveState();
     renderSidebar();
-    renderTableTabs();
-    renderMainView(appState.mainView.value);
+    openQueryTab();
   } catch (e) {
-    appState.status.set(`ERROR: ${e}`);
+    appState.status.set(`Error: ${e}`);
     statusDot.className = "status-dot error";
   }
 }
@@ -357,10 +332,8 @@ async function switchSchema(schemaName: string) {
 
     appState.status.set(`Schema: ${schemaName} (${tables.length} tables)`);
     renderSidebar();
-    // Stay on current view but clear table selection
-    renderMainView(appState.mainView.value);
   } catch (e) {
-    appState.status.set(`ERROR: ${e}`);
+    appState.status.set(`Error: ${e}`);
   }
 }
 
@@ -373,21 +346,23 @@ async function disconnectFromDb() {
     /* ignore */
   }
   appState.activeConn.set(null);
-  // Tabs are tied to a connection — drop them all
-  appState.openTableTabs.set([]);
-  appState.activeTableTab.set(null);
+  resetTabsAndLiveState();
+  statusDot.className = "status-dot";
+  appState.status.set("Disconnected");
+  renderSidebar();
+  renderContentArea();
+}
+
+function resetTabsAndLiveState() {
+  appState.openTabs.set([]);
+  appState.activeTab.set(null);
   appState.tableState.set(freshTableState());
   appState.tableMetadata.set([]);
   appState.selectedRecord.set(null);
   appState.filterRules.set([]);
-  statusDot.className = "status-dot";
-  appState.status.set("DISCONNECTED");
-  renderSidebar();
-  renderTableTabs();
-  switchView("connections");
 }
 
-// ── Main views ────────────────────────────────────────────────────────────────
+// ── Content area (tab strip + active tab body) ─────────────────────────────────
 
 let sqlEditor: SqlEditor | null = null;
 let dataGrid: DataGrid | null = null;
@@ -416,29 +391,103 @@ function schemaForEngine(): string | undefined {
   return ac.selectedSchema;
 }
 
-function renderMainView(view: MainView) {
+function renderContentArea() {
+  const ac = appState.activeConn.value;
+  if (!ac) {
+    tabStripEl.style.display = "none";
+    tabStripEl.innerHTML = "";
+    showConnectionsScreen();
+  } else {
+    tabStripEl.style.display = "";
+    renderTabStrip();
+    renderActiveTabContent();
+  }
+}
+
+function renderActiveTabContent() {
   mainContent.innerHTML = "";
   mainContent.style.overflow = "";
   mainContent.style.padding = "";
 
-  if (view === "sql") {
-    renderSqlView();
-  } else if (view === "table") {
-    renderTableView();
+  const activeId = appState.activeTab.value;
+  const tab = appState.openTabs.value.find((t) => t.id === activeId);
+
+  if (!tab) {
+    renderEmptyTabState();
+    return;
+  }
+
+  mainContent.style.cssText =
+    "flex:1;overflow:hidden;display:flex;flex-direction:column;";
+
+  if (tab.kind === "table") {
+    renderTableTabContent(tab);
   } else {
-    renderConnectionsView();
+    renderQueryTabContent(tab);
   }
 }
 
-function renderSqlView() {
-  const wrap = document.createElement("div");
-  wrap.style.cssText =
-    "flex:1;overflow:hidden;display:flex;flex-direction:column;height:100%;";
-  mainContent.appendChild(wrap);
+function renderEmptyTabState() {
+  mainContent.innerHTML = `
+    <div class="empty-state">
+      <div class="empty-state-icon">▦</div>
+      <h2>No tabs open</h2>
+      <p>Pick a table from the sidebar, or start a new query.</p>
+      <button class="btn btn-primary" id="empty-new-query">New Query</button>
+    </div>`;
+  document.getElementById("empty-new-query")?.addEventListener("click", () => openQueryTab());
+}
 
-  sqlEditor = new SqlEditor(wrap);
-
+function renderQueryTabContent(tab: QueryTab) {
   const ac = appState.activeConn.value;
+
+  const layout = document.createElement("div");
+  layout.className = "table-layout";
+  mainContent.appendChild(layout);
+
+  const wrap = document.createElement("div");
+  wrap.className = "table-main";
+  layout.appendChild(wrap);
+
+  const recordPanelEl = document.createElement("aside");
+  recordPanelEl.className = "record-panel";
+  layout.appendChild(recordPanelEl);
+
+  const queryRecordPanel = new RecordPanel({
+    container: recordPanelEl,
+    engine: ac?.config.engine ?? "postgres",
+    table: tab.title,
+    readOnly: true,
+    onCommit: async () => {},
+    onClose: () => {
+      recordPanelEl.classList.remove("open");
+      queryRecordPanel.clear();
+    },
+  });
+
+  sqlEditor = new SqlEditor(wrap, {
+    initialDoc: tab.sqlDoc,
+    initialResult: tab.sqlResult,
+    onBeforeNewResult: () => {
+      recordPanelEl.classList.remove("open");
+      queryRecordPanel.clear();
+    },
+    onRowClick: (row, rowIndex, columns) => {
+      queryRecordPanel.setColumns(columns);
+      queryRecordPanel.show({
+        rowIndex,
+        original: row.map((v) => cloneRowValue(v)),
+        draft: row.map((v) => cloneRowValue(v)),
+        dirty: false,
+      });
+      recordPanelEl.classList.add("open");
+    },
+  });
+
+  if (tab.sqlResult && tab.sqlResult.columns.length > 0) {
+    queryRecordPanel.setColumns(tab.sqlResult.columns);
+  }
+
   if (ac) {
     sqlEditor.setConnection(ac.connId, ac.config);
     loadSchemaForEditor(ac.connId, ac.selectedSchema);
@@ -465,29 +514,15 @@ async function loadSchemaForEditor(connId: string, schema?: string) {
   }
 }
 
-function renderTableView() {
+function renderTableTabContent(_tab: TableTab) {
   const ac = appState.activeConn.value;
   if (!ac?.selectedTable) {
-    mainContent.innerHTML = `
-      <div class="empty-state">
-        <pre>
-+----------------------------------+
-|  NO TABLE SELECTED               |
-|                                  |
-|  Connect and pick a table from   |
-|  the sidebar to browse data.     |
-+----------------------------------+
-        </pre>
-      </div>`;
+    renderEmptyTabState();
     return;
   }
 
   const ts = appState.tableState.value;
   const selected = appState.selectedRecord.value;
-
-  mainContent.innerHTML = "";
-  mainContent.style.cssText =
-    "flex:1;overflow:hidden;display:flex;flex-direction:column;";
 
   const tableLayout = document.createElement("div");
   tableLayout.className = "table-layout";
@@ -509,7 +544,8 @@ function renderTableView() {
 
   const refreshBtn = document.createElement("button");
   refreshBtn.className = "btn btn-secondary";
-  refreshBtn.textContent = "[F5] REFRESH";
+  refreshBtn.innerHTML = "⟳ Refresh";
+  refreshBtn.title = "Refresh (F5)";
   refreshBtn.onclick = () => {
     if (!confirmDiscardIfDirty()) return;
     clearRecordSelection();
@@ -518,7 +554,7 @@ function renderTableView() {
 
   const exportBtn = document.createElement("button");
   exportBtn.className = "btn btn-secondary";
-  exportBtn.textContent = "EXPORT CSV";
+  exportBtn.textContent = "Export CSV";
   exportBtn.onclick = () => exportCsv();
 
   const rowInfo = document.createElement("span");
@@ -594,7 +630,7 @@ function renderTableView() {
       const result = await ipc.executeQuery(ac2.connId, sql);
       if (result.error) throw new Error(result.error);
       appState.status.set(
-        `UPDATED ${result.affected_rows ?? 1} ROW(S) | ${result.execution_time_ms}ms`,
+        `Updated ${result.affected_rows ?? 1} row(s) · ${result.execution_time_ms}ms`,
       );
       const rec = appState.selectedRecord.value;
       if (rec) {
@@ -658,7 +694,7 @@ function renderTableView() {
     const ac2 = appState.activeConn.value;
     if (!ac2?.selectedTable) return;
 
-    rowInfo.textContent = "LOADING...";
+    rowInfo.textContent = "Loading…";
 
     try {
       const [rows, total] = await Promise.all([
@@ -683,7 +719,7 @@ function renderTableView() {
       ]);
 
       if (rows.error) {
-        rowInfo.textContent = `ERROR: ${rows.error}`;
+        rowInfo.textContent = `Error: ${rows.error}`;
         return;
       }
 
@@ -704,10 +740,10 @@ function renderTableView() {
 
       const start = s.page * s.pageSize + 1;
       const end = Math.min(start + rows.row_count - 1, total);
-      rowInfo.textContent = `ROWS ${start}-${end} OF ${total} | ${rows.execution_time_ms}ms`;
+      rowInfo.textContent = `Rows ${start}–${end} of ${total} · ${rows.execution_time_ms}ms`;
       renderPagination(pagination, total, s.page, s.pageSize);
     } catch (e) {
-      rowInfo.textContent = `ERROR: ${e}`;
+      rowInfo.textContent = `Error: ${e}`;
     }
   }
 
@@ -759,23 +795,23 @@ function renderPagination(
 
   const prev = document.createElement("button");
   prev.className = "btn btn-secondary";
-  prev.textContent = "[<< PREV]";
+  prev.innerHTML = "‹ Prev";
   prev.disabled = page === 0;
   prev.onclick = () => changePage(page - 1);
 
   const info = document.createElement("span");
   info.className = "page-info";
-  info.textContent = `PAGE ${page + 1} / ${totalPages}`;
+  info.textContent = `Page ${page + 1} of ${totalPages}`;
 
   const next = document.createElement("button");
   next.className = "btn btn-secondary";
-  next.textContent = "[NEXT >>]";
+  next.innerHTML = "Next ›";
   next.disabled = page >= totalPages - 1;
   next.onclick = () => changePage(page + 1);
 
   const pageSizeEl = document.createElement("span");
   pageSizeEl.style.cssText = "font-size:11px;color:var(--text-faint);";
-  pageSizeEl.textContent = `${pageSize}/PAGE`;
+  pageSizeEl.textContent = `${pageSize} / page`;
 
   el.appendChild(prev);
   el.appendChild(info);
@@ -788,10 +824,10 @@ function changePage(newPage: number) {
   clearRecordSelection();
   const s = appState.tableState.value;
   appState.tableState.set({ ...s, page: newPage });
-  renderMainView("table");
+  renderActiveTabContent();
 }
 
-function renderConnectionsView() {
+function showConnectionsScreen() {
   mainContent.style.overflow = "auto";
   mainContent.style.padding = "20px";
 
@@ -799,14 +835,14 @@ function renderConnectionsView() {
 
   const heading = document.createElement("div");
   heading.className = "section-heading";
-  heading.innerHTML = `<h2>&gt;&gt; SAVED CONNECTIONS</h2>`;
+  heading.innerHTML = `<h2>Saved Connections</h2>`;
 
   const addBtn = document.createElement("button");
   addBtn.className = "btn btn-primary";
-  addBtn.textContent = "[+] NEW CONNECTION";
+  addBtn.textContent = "+ New Connection";
   addBtn.onclick = () =>
     showConnectionModal(undefined, () => {
-      renderConnectionsView();
+      showConnectionsScreen();
       renderSidebar();
     });
   heading.appendChild(addBtn);
@@ -816,7 +852,7 @@ function renderConnectionsView() {
     const empty = document.createElement("div");
     empty.className = "empty-state";
     empty.style.marginTop = "40px";
-    empty.innerHTML = `<p style="color:var(--text-faint)">NO CONNECTIONS CONFIGURED.</p>`;
+    empty.innerHTML = `<p style="color:var(--text-faint)">No connections configured yet.</p>`;
     mainContent.appendChild(empty);
     return;
   }
@@ -833,7 +869,7 @@ function renderConnectionsView() {
 
     card.innerHTML = `
       <div class="conn-card-info">
-        <div class="conn-card-name">[${cfg.engine.slice(0, 2).toUpperCase()}] ${esc(cfg.name)}</div>
+        <div class="conn-card-name">${esc(cfg.name)}</div>
         <div class="conn-card-detail">${esc(detail.join(" "))}</div>
       </div>
       <div class="conn-card-actions"></div>
@@ -843,25 +879,25 @@ function renderConnectionsView() {
 
     const connectBtn = document.createElement("button");
     connectBtn.className = "btn btn-primary";
-    connectBtn.textContent = "CONNECT";
+    connectBtn.textContent = "Connect";
     connectBtn.onclick = () => connectToDb(cfg);
 
     const editBtn = document.createElement("button");
     editBtn.className = "btn btn-secondary";
-    editBtn.textContent = "EDIT";
+    editBtn.textContent = "Edit";
     editBtn.onclick = () =>
-      showConnectionModal(cfg, () => renderConnectionsView());
+      showConnectionModal(cfg, () => showConnectionsScreen());
 
     const delBtn = document.createElement("button");
     delBtn.className = "btn btn-danger";
-    delBtn.textContent = "DEL";
+    delBtn.textContent = "Delete";
     delBtn.onclick = async () => {
       if (!confirm(`Delete connection "${cfg.name}"?`)) return;
       try {
         await ipc.deleteConnection(cfg.id);
         const all = await ipc.loadConnections();
         appState.connections.set(all);
-        renderConnectionsView();
+        showConnectionsScreen();
         renderSidebar();
       } catch (e) {
         alert(`Error: ${e}`);
@@ -876,7 +912,7 @@ function renderConnectionsView() {
 // ── Connect to DB ─────────────────────────────────────────────────────────────
 
 async function connectToDb(cfg: ConnectionConfig) {
-  appState.status.set(`CONNECTING: ${cfg.name}…`);
+  appState.status.set(`Connecting: ${cfg.name}…`);
   statusDot.className = "status-dot";
 
   try {
@@ -908,24 +944,17 @@ async function connectToDb(cfg: ConnectionConfig) {
     });
 
     statusDot.className = "status-dot connected";
-    appState.status.set(`CONNECTED: ${cfg.name}`);
+    appState.status.set(`Connected: ${cfg.name}`);
 
     // Fresh connection — ensure clean tab state
-    appState.openTableTabs.set([]);
-    appState.activeTableTab.set(null);
-    appState.tableState.set(freshTableState());
-    appState.tableMetadata.set([]);
-    appState.selectedRecord.set(null);
-    appState.filterRules.set([]);
+    resetTabsAndLiveState();
 
     renderSidebar();
-    renderTableTabs();
-
-    // Switch to data view (setActiveView runs via the mainView subscription)
-    switchView("table");
+    // Land on a usable default query tab, like TablePlus does on connect
+    openQueryTab();
   } catch (e) {
     statusDot.className = "status-dot error";
-    appState.status.set(`ERROR: ${e}`);
+    appState.status.set(`Error: ${e}`);
     alert(`Connection failed:\n${e}`);
   }
 }
@@ -946,8 +975,7 @@ async function boot() {
     console.error("Boot error:", e);
   }
   renderSidebar();
-  renderTableTabs();
-  switchView("connections");
+  renderContentArea();
 }
 
 boot();
@@ -970,36 +998,47 @@ function freshTableState(): TableState {
   };
 }
 
-// Persist the live signals back into the currently-active tab so switching away
-// preserves its filters / sort / page / selected record.
+// Persist the live signals / component state back into the currently-active
+// tab so switching away preserves its filters / sort / page / SQL doc, etc.
 function persistCurrentTabState() {
-  const activeId = appState.activeTableTab.value;
+  const activeId = appState.activeTab.value;
   if (!activeId) return;
-  const tabs = appState.openTableTabs.value;
+  const tabs = appState.openTabs.value;
   const idx = tabs.findIndex((t) => t.id === activeId);
   if (idx === -1) return;
   const tab = tabs[idx]!;
-  const updated: OpenTableTab = {
-    ...tab,
-    tableState: { ...appState.tableState.value },
-    tableMetadata: [...appState.tableMetadata.value],
-    selectedRecord: appState.selectedRecord.value
-      ? {
-          ...appState.selectedRecord.value,
-          original: appState.selectedRecord.value.original.map((v) => cloneRowValue(v)),
-          draft: appState.selectedRecord.value.draft.map((v) => cloneRowValue(v)),
-        }
-      : null,
-    filterRules: filterBar?.getRules().map((r) => ({ ...r })) ?? [...appState.filterRules.value],
-  };
+
+  let updated: AppTab;
+  if (tab.kind === "table") {
+    updated = {
+      ...tab,
+      tableState: { ...appState.tableState.value },
+      tableMetadata: [...appState.tableMetadata.value],
+      selectedRecord: appState.selectedRecord.value
+        ? {
+            ...appState.selectedRecord.value,
+            original: appState.selectedRecord.value.original.map((v) => cloneRowValue(v)),
+            draft: appState.selectedRecord.value.draft.map((v) => cloneRowValue(v)),
+          }
+        : null,
+      filterRules: filterBar?.getRules().map((r) => ({ ...r })) ?? [...appState.filterRules.value],
+    };
+  } else {
+    updated = {
+      ...tab,
+      sqlDoc: sqlEditor?.getDoc() ?? tab.sqlDoc,
+      sqlResult: sqlEditor?.getLastResult() ?? tab.sqlResult,
+    };
+  }
+
   const next = [...tabs];
   next[idx] = updated;
-  appState.openTableTabs.set(next);
+  appState.openTabs.set(next);
 }
 
-// Restore a tab's stored state into the global signals so renderTableView can
-// operate on them unchanged.
-function loadTabStateIntoSignals(tab: OpenTableTab) {
+// Restore a table tab's stored state into the live signals so
+// renderTableTabContent can operate on them unchanged.
+function loadTableTabIntoSignals(tab: TableTab) {
   appState.tableState.set({ ...tab.tableState });
   appState.tableMetadata.set([...tab.tableMetadata]);
   appState.selectedRecord.set(
@@ -1014,29 +1053,19 @@ function loadTabStateIntoSignals(tab: OpenTableTab) {
   appState.filterRules.set(tab.filterRules.map((r) => ({ ...r })));
 }
 
-function renderTableTabs() {
-  const tabs = appState.openTableTabs.value;
-  const activeTabId = appState.activeTableTab.value;
+function renderTabStrip() {
+  const tabs = appState.openTabs.value;
+  const activeTabId = appState.activeTab.value;
 
-  tableTabsList.innerHTML = "";
-  tableTabsList.className = "table-tab-strip";
+  tabStripEl.innerHTML = "";
 
-  // Trailing controls: [+] new tab and [close-all]
   const appendTrailingControls = () => {
     const newTabBtn = document.createElement("button");
     newTabBtn.className = "table-tab-add";
     newTabBtn.innerHTML = "+";
-    newTabBtn.title = "Open / focus table tab";
-    newTabBtn.onclick = () => {
-      const ac = appState.activeConn.value;
-      if (!ac) return;
-      if (ac.selectedTable) {
-        openOrCreateTableTab(ac.selectedTable, ac.selectedSchema, ac.selectedDatabase);
-      } else {
-        appState.status.set("SELECT A TABLE FIRST");
-      }
-    };
-    tableTabsList.appendChild(newTabBtn);
+    newTabBtn.title = "New query (⌘T)";
+    newTabBtn.onclick = () => openQueryTab();
+    tabStripEl.appendChild(newTabBtn);
 
     if (tabs.length > 0) {
       const closeAllBtn = document.createElement("button");
@@ -1045,9 +1074,9 @@ function renderTableTabs() {
       closeAllBtn.title = "Close all tabs";
       closeAllBtn.onclick = () => {
         if (!confirm(`Close all ${tabs.length} open tabs?`)) return;
-        closeAllTableTabs();
+        closeAllTabs();
       };
-      tableTabsList.appendChild(closeAllBtn);
+      tabStripEl.appendChild(closeAllBtn);
     }
   };
 
@@ -1060,12 +1089,20 @@ function renderTableTabs() {
     const isActive = activeTabId === tab.id;
     const item = document.createElement("div");
     item.className = `table-tab${isActive ? " active" : ""}`;
-    item.title = `${tab.schema ? tab.schema + "." : ""}${tab.name}`;
-    item.onclick = () => switchToTableTab(tab.id);
+    const label = tab.kind === "table" ? tab.name : tab.title;
+    item.title =
+      tab.kind === "table"
+        ? `${tab.schema ? tab.schema + "." : ""}${tab.name}`
+        : tab.title;
+    item.onclick = () => switchToTab(tab.id);
 
-    const label = document.createElement("span");
-    label.className = "table-tab-label";
-    label.textContent = tab.name;
+    const icon = document.createElement("span");
+    icon.className = "table-tab-icon";
+    icon.textContent = tab.kind === "table" ? "▦" : "❯";
+
+    const labelEl = document.createElement("span");
+    labelEl.className = "table-tab-label";
+    labelEl.textContent = label;
 
     const closeBtn = document.createElement("button");
     closeBtn.className = "table-tab-close";
@@ -1073,12 +1110,13 @@ function renderTableTabs() {
     closeBtn.title = "Close tab";
     closeBtn.onclick = (e) => {
       e.stopPropagation();
-      closeTableTab(tab.id);
+      closeTab(tab.id);
     };
 
-    item.appendChild(label);
+    item.appendChild(icon);
+    item.appendChild(labelEl);
     item.appendChild(closeBtn);
-    tableTabsList.appendChild(item);
+    tabStripEl.appendChild(item);
   });
 
   appendTrailingControls();
@@ -1089,8 +1127,9 @@ function openOrCreateTableTab(tableName: string, schema?: string, database?: str
   const ac = appState.activeConn.value;
   if (!ac) return;
 
-  const existing = appState.openTableTabs.value.find(
-    (t) =>
+  const existing = appState.openTabs.value.find(
+    (t): t is TableTab =>
+      t.kind === "table" &&
       t.connId === ac.connId &&
       t.name === tableName &&
       (t.schema ?? undefined) === (schema ?? undefined) &&
@@ -1098,108 +1137,102 @@ function openOrCreateTableTab(tableName: string, schema?: string, database?: str
   );
 
   if (existing) {
-    switchToTableTab(existing.id);
+    switchToTab(existing.id);
     return;
   }
 
   openTableInNewTab(ac, tableName, schema, database);
 }
 
-function switchToTableTab(tabId: string) {
-  const tabs = appState.openTableTabs.value;
+function switchToTab(tabId: string) {
+  const tabs = appState.openTabs.value;
   const tab = tabs.find((t) => t.id === tabId);
   if (!tab) return;
 
   // Save the outgoing tab's live state first
   persistCurrentTabState();
 
-  appState.activeTableTab.set(tabId);
+  appState.activeTab.set(tabId);
 
   const ac = appState.activeConn.value;
-  if (!ac) return;
+  if (tab.kind === "table" && ac) {
+    appState.activeConn.set({
+      ...ac,
+      selectedTable: tab.name,
+      selectedSchema: tab.schema ?? ac.selectedSchema,
+      selectedDatabase: tab.database ?? ac.selectedDatabase,
+    });
+    loadTableTabIntoSignals(tab);
+  }
 
-  appState.activeConn.set({
-    ...ac,
-    selectedTable: tab.name,
-    selectedSchema: tab.schema ?? ac.selectedSchema,
-    selectedDatabase: tab.database ?? ac.selectedDatabase,
-  });
-
-  loadTabStateIntoSignals(tab);
-  renderTableTabs();
-  renderMainView("table");
+  renderTabStrip();
+  renderActiveTabContent();
 }
 
-function closeTableTab(tabId: string) {
-  const tabs = appState.openTableTabs.value;
+function closeTab(tabId: string) {
+  const tabs = appState.openTabs.value;
   const idx = tabs.findIndex((t) => t.id === tabId);
   if (idx === -1) return;
+  const tab = tabs[idx]!;
+  const wasActive = appState.activeTab.value === tabId;
 
-  // If closing the active tab that has unsaved edits, ask first
+  // If closing the active table tab that has unsaved edits, ask first
   if (
-    appState.activeTableTab.value === tabId &&
+    wasActive &&
+    tab.kind === "table" &&
     appState.selectedRecord.value?.dirty &&
     !confirm("Discard unsaved changes in this tab?")
   ) {
     return;
   }
 
-  const wasActive = appState.activeTableTab.value === tabId;
   const newTabs = tabs.filter((t) => t.id !== tabId);
-  appState.openTableTabs.set(newTabs);
+  appState.openTabs.set(newTabs);
 
   if (wasActive) {
-    // Pick a neighbor to activate
     if (newTabs.length > 0) {
+      // Pick a neighbor to activate
       const nextIdx = Math.min(idx, newTabs.length - 1);
       const nextTab = newTabs[nextIdx]!;
-      appState.activeTableTab.set(nextTab.id);
+      appState.activeTab.set(nextTab.id);
       const ac = appState.activeConn.value;
-      if (ac) {
+      if (nextTab.kind === "table" && ac) {
         appState.activeConn.set({
           ...ac,
           selectedTable: nextTab.name,
           selectedSchema: nextTab.schema ?? ac.selectedSchema,
           selectedDatabase: nextTab.database ?? ac.selectedDatabase,
         });
-        loadTabStateIntoSignals(nextTab);
-        renderMainView("table");
+        loadTableTabIntoSignals(nextTab);
       }
+      renderActiveTabContent();
     } else {
-      appState.activeTableTab.set(null);
+      appState.activeTab.set(null);
       // No tabs left — reset table signals to a clean state
       appState.tableState.set(freshTableState());
       appState.tableMetadata.set([]);
       appState.selectedRecord.set(null);
       appState.filterRules.set([]);
       const ac = appState.activeConn.value;
-      if (ac) {
-        appState.activeConn.set({ ...ac, selectedTable: undefined });
-        renderMainView("table");
-      }
+      if (ac) appState.activeConn.set({ ...ac, selectedTable: undefined });
+      renderActiveTabContent();
     }
   }
 
-  renderTableTabs();
+  renderTabStrip();
 }
 
-function closeAllTableTabs() {
-  appState.openTableTabs.set([]);
-  appState.activeTableTab.set(null);
-  appState.tableState.set(freshTableState());
-  appState.tableMetadata.set([]);
-  appState.selectedRecord.set(null);
-  appState.filterRules.set([]);
+function closeAllTabs() {
+  resetTabsAndLiveState();
   const ac = appState.activeConn.value;
-  if (ac) {
-    appState.activeConn.set({ ...ac, selectedTable: undefined });
-    renderMainView("table");
-  }
-  renderTableTabs();
+  if (ac) appState.activeConn.set({ ...ac, selectedTable: undefined });
+  renderActiveTabContent();
+  renderTabStrip();
 }
 
-// Always create a brand new tab (allows duplicates — e.g. two views of one table
-// with different filters). Used by the [+] button.
+// Always create a brand new table tab (allows duplicates — e.g. two views of
+// one table with different filters). Used from the sidebar when no matching
+// tab already exists.
 function openTableInNewTab(
   ac: ActiveConnection,
   tableName: string,
@@ -1209,8 +1242,9 @@ function openTableInNewTab(
   // Save the outgoing tab's state before replacing the live signals
   persistCurrentTabState();
 
-  const tab: OpenTableTab = {
+  const tab: TableTab = {
     id: generateTabId(),
+    kind: "table",
     name: tableName,
     schema: schema ?? ac.selectedSchema,
     database: database ?? ac.selectedDatabase,
@@ -1221,8 +1255,8 @@ function openTableInNewTab(
     filterRules: [],
   };
 
-  appState.openTableTabs.set([...appState.openTableTabs.value, tab]);
-  appState.activeTableTab.set(tab.id);
+  appState.openTabs.set([...appState.openTabs.value, tab]);
+  appState.activeTab.set(tab.id);
 
   appState.activeConn.set({
     ...ac,
@@ -1237,8 +1271,34 @@ function openTableInNewTab(
   appState.selectedRecord.set(null);
   appState.filterRules.set([]);
 
-  renderTableTabs();
-  renderMainView("table");
+  renderTabStrip();
+  renderActiveTabContent();
+}
+
+// Creates a new blank SQL query tab. Used by the tab-strip "+" button, the
+// titlebar "New Query" button, and automatically on connect.
+function openQueryTab() {
+  const ac = appState.activeConn.value;
+  if (!ac) return;
+
+  persistCurrentTabState();
+
+  const queryCount = appState.openTabs.value.filter((t) => t.kind === "query").length;
+  const tab: QueryTab = {
+    id: generateTabId(),
+    kind: "query",
+    title: `Query ${queryCount + 1}`,
+    connId: ac.connId,
+    sqlDoc: "SELECT 1;\n",
+    sqlResult: null,
+  };
+
+  appState.openTabs.set([...appState.openTabs.value, tab]);
+  appState.activeTab.set(tab.id);
+
+  tabStripEl.style.display = "";
+  renderTabStrip();
+  renderActiveTabContent();
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
