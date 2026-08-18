@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DBKonn — Native macOS Database Client</title>
+  <meta name="description" content="A native macOS database client with a retro terminal aesthetic. Connect to PostgreSQL, MySQL, SQLite, or SQL Server." />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'JetBrains Mono', monospace; }
+  </style>
+</head>
+<body class="bg-neutral-950 text-neutral-200">
+
+  <!-- Nav -->
+  <header class="border-b border-neutral-800">
+    <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="text-green-400 text-lg">&gt;_</span>
+        <span class="font-bold text-white tracking-tight">DBKonn</span>
+      </div>
+      <a href="https://github.com/tumugide/DBKonn" target="_blank" rel="noopener"
+         class="text-sm text-neutral-400 hover:text-green-400 transition-colors">GitHub</a>
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <section class="max-w-5xl mx-auto px-6 py-20 text-center">
+    <p class="text-green-400 text-sm mb-3">$ welcome to dbkonn --version 0.1.1</p>
+    <h1 class="text-4xl md:text-5xl font-extrabold text-white tracking-tight mb-4">
+      A native macOS database client<br class="hidden md:block" /> with a retro terminal aesthetic.
+    </h1>
+    <p class="text-neutral-400 max-w-2xl mx-auto mb-10">
+      Connect to PostgreSQL, MySQL, SQLite, or SQL Server. Browse schemas and tables,
+      filter rows, edit records inline, and run SQL — all from a single desktop app.
+    </p>
+
+    <div class="flex flex-col items-center gap-3">
+      <a href="appbuilds/DBKonn_0.1.1_aarch64.dmg" download
+         class="inline-flex items-center gap-2 bg-green-500 hover:bg-green-400 text-neutral-950 font-bold px-6 py-3 rounded-lg transition-colors">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16" />
+        </svg>
+        Download for Apple Silicon (.dmg)
+      </a>
+      <span class="text-xs text-neutral-500">v0.1.1 · macOS (M1/M2/M3/M4) · Intel &amp; Windows/Linux coming soon</span>
+    </div>
+  </section>
+
+  <!-- Info -->
+  <section class="max-w-5xl mx-auto px-6 py-16 border-t border-neutral-800">
+    <h2 class="text-xl font-bold text-white mb-8 text-center">Features</h2>
+    <div class="grid sm:grid-cols-2 md:grid-cols-3 gap-6">
+      <div class="border border-neutral-800 rounded-lg p-5">
+        <h3 class="text-green-400 font-bold mb-1">Multi-engine support</h3>
+        <p class="text-sm text-neutral-400">PostgreSQL, MySQL/MariaDB, SQLite, and Microsoft SQL Server.</p>
+      </div>
+      <div class="border border-neutral-800 rounded-lg p-5">
+        <h3 class="text-green-400 font-bold mb-1">Connection manager</h3>
+        <p class="text-sm text-neutral-400">Save profiles; passwords stored securely in the macOS Keychain.</p>
+      </div>
+      <div class="border border-neutral-800 rounded-lg p-5">
+        <h3 class="text-green-400 font-bold mb-1">Schema browser</h3>
+        <p class="text-sm text-neutral-400">Databases, schemas, and tables laid out in a sidebar tree.</p>
+      </div>
+      <div class="border border-neutral-800 rounded-lg p-5">
+        <h3 class="text-green-400 font-bold mb-1">Data grid</h3>
+        <p class="text-sm text-neutral-400">Virtual-scrolled table view with sorting and pagination.</p>
+      </div>
+      <div class="border border-neutral-800 rounded-lg p-5">
+        <h3 class="text-green-400 font-bold mb-1">Record editor</h3>
+        <p class="text-sm text-neutral-400">View and edit rows with type-aware fields, commit/rollback.</p>
+      </div>
+      <div class="border border-neutral-800 rounded-lg p-5">
+        <h3 class="text-green-400 font-bold mb-1">SQL editor</h3>
+        <p class="text-sm text-neutral-400">CodeMirror 6 with dialect-aware syntax highlighting.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Install -->
+  <section class="max-w-5xl mx-auto px-6 py-16 border-t border-neutral-800">
+    <h2 class="text-xl font-bold text-white mb-6 text-center">Install</h2>
+    <ol class="max-w-xl mx-auto text-sm text-neutral-400 space-y-2 list-decimal list-inside mb-8">
+      <li>Open the <span class="text-neutral-200">.dmg</span> and drag <span class="text-neutral-200">DBKonn</span> into Applications.</li>
+      <li>If macOS says the app is "damaged and can't be opened", right-click it and choose <span class="text-neutral-200">Open</span>, or run the command below.</li>
+    </ol>
+
+    <div class="bg-black border border-neutral-800 rounded-lg p-5 max-w-xl mx-auto text-sm">
+      <p class="text-neutral-500 mb-2"># clear the quarantine attribute</p>
+      <p class="text-green-400">$ xattr -cr /Applications/DBKonn.app</p>
+    </div>
+
+    <div class="bg-black border border-neutral-800 rounded-lg p-5 max-w-xl mx-auto text-sm mt-4">
+      <p class="text-neutral-500 mb-2"># still blocked as "damaged"? re-sign locally and clear quarantine</p>
+      <p class="text-green-400 break-all">$ codesign --force --deep -s - /Applications/DBKonn.app &amp;&amp; xattr -rd com.apple.quarantine /Applications/DBKonn.app</p>
+    </div>
+  </section>
+
+  <footer class="border-t border-neutral-800 py-8 text-center text-xs text-neutral-600">
+    MIT License · Built with Tauri 2 + Rust
+  </footer>
+
+</body>
+</html>

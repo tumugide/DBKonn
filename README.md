@@ -8,17 +8,9 @@ Built with **Tauri 2** (Rust backend) and a **TypeScript** frontend.
 
 Pre-built for **macOS on Apple Silicon** (M1/M2/M3/M4):
 
-**[Download DBKonn v0.1.0 — Apple Silicon (.dmg)](appbuilds/DBKonn_0.1.0_aarch64.dmg)**
+**[Download DBKonn v0.1.1 — Apple Silicon (.dmg)](appbuilds/DBKonn_0.1.1_aarch64.dmg)**
 
-**Option A — Install script (recommended):**
-
-```bash
-./install.sh
-```
-
-This mounts the `.dmg`, copies DBKonn to `/Applications`, and removes the quarantine attribute so Gatekeeper won't block it.
-
-**Option B — Manual install:**
+**Install:**
 
 1. Open the `.dmg` and drag **DBKonn** into Applications.
 2. If macOS says the app is "damaged and can't be opened", right-click the app and choose **Open**, or run:
@@ -26,8 +18,14 @@ This mounts the `.dmg`, copies DBKonn to `/Applications`, and removes the quaran
    xattr -cr /Applications/DBKonn.app
    ```
    Then open it normally.
+3. If it's still blocked (unsigned build), re-sign it locally and clear quarantine:
+   ```bash
+   codesign --force --deep -s - /Applications/DBKonn.app && xattr -rd com.apple.quarantine /Applications/DBKonn.app
+   ```
 
 > Intel Macs and Linux/Windows builds are not included yet. See [Build from source](#build-from-source) below.
+>
+> Cloned the repo instead? Run `./install.sh` to do steps 1–2 for you.
 
 ## Features
 
