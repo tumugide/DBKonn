@@ -666,14 +666,22 @@ async function loadSchemaForEditor(connId: string, schema?: string) {
     const tables = await ipc.listTables(connId, schema);
     const tableSchemas: { name: string; columns: ColumnInfo[] }[] = [];
     const toDescribe = tables.slice(0, 50);
-    const results = await Promise.allSettled(
-      toDescribe.map((t) => ipc.describeTable(connId, schema, t.name)),
-    );
-    results.forEach((r, i) => {
-      if (r.status === "fulfilled") {
-        tableSchemas.push({ name: toDescribe[i]!.name, columns: r.value[0] });
-      }
-    });
+    // Fetched a few tables at a time rather than all at once — firing every
+    // describe_table call concurrently right after connect opened a burst of
+    // brand-new pool connections (up to the pool's max_connections) all at
+    // once, which some DB hosts throttle/reject as a connection storm.
+    const CONCURRENCY = 5;
+    for (let i = 0; i < toDescribe.length; i += CONCURRENCY) {
+      const batch = toDescribe.slice(i, i + CONCURRENCY);
+      const results = await Promise.allSettled(
+        batch.map((t) => ipc.describeTable(connId, schema, t.name)),
+      );
+      results.forEach((r, j) => {
+        if (r.status === "fulfilled") {
+          tableSchemas.push({ name: batch[j]!.name, columns: r.value[0] });
+        }
+      });
+    }
     sqlEditor.setSchema(tableSchemas);
   } catch (e) {
     console.warn("Schema autocomplete load failed:", e);
