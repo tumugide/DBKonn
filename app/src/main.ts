@@ -950,6 +950,19 @@ function renderTableTabContent(_tab: TableTab) {
   }
 }
 
+// "All" is represented by a large sentinel limit rather than a real
+// unbounded fetch, so it can flow through the existing LIMIT/OFFSET
+// pipeline (PageRequest.limit is u64 on the Rust side) unchanged.
+const PAGE_SIZE_ALL = 1_000_000_000;
+const PAGE_SIZE_OPTIONS: { value: number; label: string }[] = [
+  { value: 10, label: "10" },
+  { value: 50, label: "50" },
+  { value: 100, label: "100" },
+  { value: 500, label: "500" },
+  { value: 1000, label: "1000" },
+  { value: PAGE_SIZE_ALL, label: "All" },
+];
+
 function renderPagination(
   el: HTMLElement,
   total: number,
@@ -975,14 +988,32 @@ function renderPagination(
   next.disabled = page >= totalPages - 1;
   next.onclick = () => changePage(page + 1);
 
-  const pageSizeEl = document.createElement("span");
-  pageSizeEl.style.cssText = "font-size:11px;color:var(--text-faint);";
-  pageSizeEl.textContent = `${pageSize} / page`;
+  const pageSizeSelect = document.createElement("select");
+  pageSizeSelect.className = "page-size-select";
+  pageSizeSelect.title = "Rows per page";
+  const knownSizes = new Set(PAGE_SIZE_OPTIONS.map((o) => o.value));
+  const options = knownSizes.has(pageSize)
+    ? PAGE_SIZE_OPTIONS
+    : [...PAGE_SIZE_OPTIONS, { value: pageSize, label: String(pageSize) }].sort(
+        (a, b) => a.value - b.value,
+      );
+  for (const opt of options) {
+    const optionEl = document.createElement("option");
+    optionEl.value = String(opt.value);
+    optionEl.textContent = opt.label;
+    optionEl.selected = opt.value === pageSize;
+    pageSizeSelect.appendChild(optionEl);
+  }
+  pageSizeSelect.onchange = () => changePageSize(Number(pageSizeSelect.value));
+
+  const pageSizeLabel = document.createElement("span");
+  pageSizeLabel.textContent = "/ page";
 
   el.appendChild(prev);
   el.appendChild(info);
   el.appendChild(next);
-  el.appendChild(pageSizeEl);
+  el.appendChild(pageSizeSelect);
+  el.appendChild(pageSizeLabel);
 }
 
 function changePage(newPage: number) {
@@ -990,6 +1021,14 @@ function changePage(newPage: number) {
   clearRecordSelection();
   const s = appState.tableState.value;
   appState.tableState.set({ ...s, page: newPage });
+  renderActiveTabContent();
+}
+
+function changePageSize(newPageSize: number) {
+  if (!confirmDiscardIfDirty()) return;
+  clearRecordSelection();
+  const s = appState.tableState.value;
+  appState.tableState.set({ ...s, pageSize: newPageSize, page: 0 });
   renderActiveTabContent();
 }
 
