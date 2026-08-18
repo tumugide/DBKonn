@@ -666,10 +666,10 @@ async function loadSchemaForEditor(connId: string, schema?: string) {
     const tables = await ipc.listTables(connId, schema);
     const tableSchemas: { name: string; columns: ColumnInfo[] }[] = [];
     const toDescribe = tables.slice(0, 50);
-    // Fetched a few tables at a time rather than all at once — firing every
-    // describe_table call concurrently right after connect opened a burst of
-    // brand-new pool connections (up to the pool's max_connections) all at
-    // once, which some DB hosts throttle/reject as a connection storm.
+    // Fetch a few tables at a time rather than all at once — firing every
+    // describe_table call concurrently right after connecting can open a burst of
+    // brand-new pool connections (up to the pool's max_connections) at once,
+    // which some DB hosts throttle/reject as a connection storm.
     const CONCURRENCY = 5;
     for (let i = 0; i < toDescribe.length; i += CONCURRENCY) {
       const batch = toDescribe.slice(i, i + CONCURRENCY);
