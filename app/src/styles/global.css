@@ -91,21 +91,24 @@
     --bg-surface: #222222;
     --bg-overlay: #252525;
     --bg-hover: #2a2a2a;
-    --bg-selected: #4a9eff;
+    /* Highlight/AccentColor are CSS system colors — WebKit resolves them
+       live from System Settings > Appearance (Highlight color / Accent
+       color), the same values native AppKit apps like Music or Notes use. */
+    --bg-selected: Highlight;
     --text-primary: #e8e8e8;
     --text-secondary: #b0b0b0;
     --text-muted: #7a7a7a;
     --text-faint: #444444;
     --text-on-accent: #ffffff;
 
-    --accent: #4a9eff;
+    --accent: AccentColor;
     --accent-secondary: #357abd;
     --accent-red: #f26d78;
     --accent-yellow: #e6b450;
     --accent-amber: #ff8a3c;
     --accent-green: #4caf50;
     --accent-cyan: #4a9eff;
-    --accent-blue: #4a9eff;
+    --accent-blue: AccentColor;
     --accent-mauve: #b388ff;
     --accent-white: #ffffff;
 
@@ -125,21 +128,24 @@
     --bg-surface: #f7f7f8;
     --bg-overlay: #eef0f2;
     --bg-hover: #e6e8eb;
-    --bg-selected: #2563eb;
+    /* Highlight/AccentColor are CSS system colors — WebKit resolves them
+       live from System Settings > Appearance (Highlight color / Accent
+       color), the same values native AppKit apps like Music or Notes use. */
+    --bg-selected: Highlight;
     --text-primary: #1a1a1a;
     --text-secondary: #4a4a4a;
     --text-muted: #808080;
     --text-faint: #c4c4c4;
     --text-on-accent: #ffffff;
 
-    --accent: #2563eb;
+    --accent: AccentColor;
     --accent-secondary: #3b82f6;
     --accent-red: #dc2626;
     --accent-yellow: #ca8a04;
     --accent-amber: #ea580c;
     --accent-green: #16a34a;
     --accent-cyan: #0891b2;
-    --accent-blue: #2563eb;
+    --accent-blue: AccentColor;
     --accent-mauve: #7c3aed;
     --accent-white: #ffffff;
 
