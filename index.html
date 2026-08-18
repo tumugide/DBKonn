@@ -1,304 +1,659 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en" class="scroll-smooth">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DBKonn — Native macOS Database Client</title>
-  <meta name="description" content="A native macOS database client with a retro terminal aesthetic. Connect to PostgreSQL, MySQL, SQLite, or SQL Server." />
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet">
-  <style>
-    body { font-family: 'JetBrains Mono', monospace; }
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>DBKonn — Native macOS Database Client</title>
+        <meta
+            name="description"
+            content="A native macOS database client with a retro terminal aesthetic. Connect to PostgreSQL, MySQL, SQLite, or SQL Server."
+        />
+        <script src="https://cdn.tailwindcss.com"></script>
+        <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link
+            href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap"
+            rel="stylesheet"
+        />
+        <style>
+            body {
+                font-family: "JetBrains Mono", monospace;
+            }
 
-    /* ══════════════════════════════════════════════════════════════════
+            /* ══════════════════════════════════════════════════════════════════
        Theme preview — mirrors app/src/styles/global.css theme tokens
        so this mockup matches what the real app looks like per-theme.
        ══════════════════════════════════════════════════════════════════ */
-    .preview[data-theme="bios"] {
-      --bg-base:#000000; --bg-surface:#0a0f0a; --bg-overlay:#101710; --bg-hover:#182018;
-      --text-primary:#33ff33; --text-secondary:#00cc00; --text-muted:#4c9a4c; --text-faint:#2a4a2a; --text-on-accent:#000000;
-      --accent:#33ff33; --accent-red:#ff4400; --accent-green:#33ff33; --accent-cyan:#00ffff;
-      --border:#1c2e1c; --border-mid:#2a4a2a; --radius:6px;
-    }
-    .preview[data-theme="monokai"] {
-      --bg-base:#272822; --bg-surface:#2d2e27; --bg-overlay:#31322b; --bg-hover:#383830;
-      --text-primary:#f8f8f2; --text-secondary:#a6a68b; --text-muted:#8f8c76; --text-faint:#4a4a3e; --text-on-accent:#272822;
-      --accent:#a6e22e; --accent-red:#f92672; --accent-green:#a6e22e; --accent-cyan:#66d9ef;
-      --border:#3c3d34; --border-mid:#4a4a3e; --radius:6px;
-    }
-    .preview[data-theme="dark"] {
-      --bg-base:#1a1a1a; --bg-surface:#222222; --bg-overlay:#252525; --bg-hover:#2a2a2a;
-      --text-primary:#e8e8e8; --text-secondary:#b0b0b0; --text-muted:#7a7a7a; --text-faint:#444444; --text-on-accent:#ffffff;
-      --accent:#4a9eff; --accent-red:#f26d78; --accent-green:#4caf50; --accent-cyan:#4a9eff;
-      --border:#303030; --border-mid:#3a3a3a; --radius:8px;
-    }
-    .preview[data-theme="light"] {
-      --bg-base:#ffffff; --bg-surface:#f7f7f8; --bg-overlay:#eef0f2; --bg-hover:#e6e8eb;
-      --text-primary:#1a1a1a; --text-secondary:#4a4a4a; --text-muted:#808080; --text-faint:#c4c4c4; --text-on-accent:#ffffff;
-      --accent:#2563eb; --accent-red:#dc2626; --accent-green:#16a34a; --accent-cyan:#0891b2;
-      --border:#e2e2e4; --border-mid:#d4d4d6; --radius:8px;
-    }
-    .preview[data-theme="catppuccin"] {
-      --bg-base:#1e1e2e; --bg-surface:#252537; --bg-overlay:#2a2a3d; --bg-hover:#313244;
-      --text-primary:#cdd6f4; --text-secondary:#a6adc8; --text-muted:#7d84a3; --text-faint:#45475a; --text-on-accent:#1e1e2e;
-      --accent:#cba6f7; --accent-red:#f38ba8; --accent-green:#a6e3a1; --accent-cyan:#94e2d5;
-      --border:#34364a; --border-mid:#45475a; --radius:8px;
-    }
-    .preview[data-theme="ayu-dark"] {
-      --bg-base:#0b0e14; --bg-surface:#131721; --bg-overlay:#1a1f29; --bg-hover:#1f2430;
-      --text-primary:#b3b1ad; --text-secondary:#8a8986; --text-muted:#676c71; --text-faint:#363a40; --text-on-accent:#ffffff;
-      --accent:#ff8a3c; --accent-red:#f26d78; --accent-green:#aad94c; --accent-cyan:#6dcbfa;
-      --border:#232830; --border-mid:#363a40; --radius:8px;
-    }
-    .preview[data-theme="ayu-light"] {
-      --bg-base:#ffffff; --bg-surface:#fafafa; --bg-overlay:#f0f0f0; --bg-hover:#e8e8e8;
-      --text-primary:#5c6166; --text-secondary:#8a8986; --text-muted:#adadad; --text-faint:#d8d8d8; --text-on-accent:#ffffff;
-      --accent:#ff8a3c; --accent-red:#f07178; --accent-green:#86b300; --accent-cyan:#36a3d9;
-      --border:#e5e5e5; --border-mid:#d5d5d5; --radius:8px;
-    }
+            .preview[data-theme="bios"] {
+                --bg-base: #000000;
+                --bg-surface: #0a0f0a;
+                --bg-overlay: #101710;
+                --bg-hover: #182018;
+                --text-primary: #33ff33;
+                --text-secondary: #00cc00;
+                --text-muted: #4c9a4c;
+                --text-faint: #2a4a2a;
+                --text-on-accent: #000000;
+                --accent: #33ff33;
+                --accent-red: #ff4400;
+                --accent-green: #33ff33;
+                --accent-cyan: #00ffff;
+                --border: #1c2e1c;
+                --border-mid: #2a4a2a;
+                --radius: 6px;
+            }
+            .preview[data-theme="monokai"] {
+                --bg-base: #272822;
+                --bg-surface: #2d2e27;
+                --bg-overlay: #31322b;
+                --bg-hover: #383830;
+                --text-primary: #f8f8f2;
+                --text-secondary: #a6a68b;
+                --text-muted: #8f8c76;
+                --text-faint: #4a4a3e;
+                --text-on-accent: #272822;
+                --accent: #a6e22e;
+                --accent-red: #f92672;
+                --accent-green: #a6e22e;
+                --accent-cyan: #66d9ef;
+                --border: #3c3d34;
+                --border-mid: #4a4a3e;
+                --radius: 6px;
+            }
+            .preview[data-theme="dark"] {
+                --bg-base: #1a1a1a;
+                --bg-surface: #222222;
+                --bg-overlay: #252525;
+                --bg-hover: #2a2a2a;
+                --text-primary: #e8e8e8;
+                --text-secondary: #b0b0b0;
+                --text-muted: #7a7a7a;
+                --text-faint: #444444;
+                --text-on-accent: #ffffff;
+                --accent: #4a9eff;
+                --accent-red: #f26d78;
+                --accent-green: #4caf50;
+                --accent-cyan: #4a9eff;
+                --border: #303030;
+                --border-mid: #3a3a3a;
+                --radius: 8px;
+            }
+            .preview[data-theme="light"] {
+                --bg-base: #ffffff;
+                --bg-surface: #f7f7f8;
+                --bg-overlay: #eef0f2;
+                --bg-hover: #e6e8eb;
+                --text-primary: #1a1a1a;
+                --text-secondary: #4a4a4a;
+                --text-muted: #808080;
+                --text-faint: #c4c4c4;
+                --text-on-accent: #ffffff;
+                --accent: #2563eb;
+                --accent-red: #dc2626;
+                --accent-green: #16a34a;
+                --accent-cyan: #0891b2;
+                --border: #e2e2e4;
+                --border-mid: #d4d4d6;
+                --radius: 8px;
+            }
+            .preview[data-theme="catppuccin"] {
+                --bg-base: #1e1e2e;
+                --bg-surface: #252537;
+                --bg-overlay: #2a2a3d;
+                --bg-hover: #313244;
+                --text-primary: #cdd6f4;
+                --text-secondary: #a6adc8;
+                --text-muted: #7d84a3;
+                --text-faint: #45475a;
+                --text-on-accent: #1e1e2e;
+                --accent: #cba6f7;
+                --accent-red: #f38ba8;
+                --accent-green: #a6e3a1;
+                --accent-cyan: #94e2d5;
+                --border: #34364a;
+                --border-mid: #45475a;
+                --radius: 8px;
+            }
+            .preview[data-theme="ayu-dark"] {
+                --bg-base: #0b0e14;
+                --bg-surface: #131721;
+                --bg-overlay: #1a1f29;
+                --bg-hover: #1f2430;
+                --text-primary: #b3b1ad;
+                --text-secondary: #8a8986;
+                --text-muted: #676c71;
+                --text-faint: #363a40;
+                --text-on-accent: #ffffff;
+                --accent: #ff8a3c;
+                --accent-red: #f26d78;
+                --accent-green: #aad94c;
+                --accent-cyan: #6dcbfa;
+                --border: #232830;
+                --border-mid: #363a40;
+                --radius: 8px;
+            }
+            .preview[data-theme="ayu-light"] {
+                --bg-base: #ffffff;
+                --bg-surface: #fafafa;
+                --bg-overlay: #f0f0f0;
+                --bg-hover: #e8e8e8;
+                --text-primary: #5c6166;
+                --text-secondary: #8a8986;
+                --text-muted: #adadad;
+                --text-faint: #d8d8d8;
+                --text-on-accent: #ffffff;
+                --accent: #ff8a3c;
+                --accent-red: #f07178;
+                --accent-green: #86b300;
+                --accent-cyan: #36a3d9;
+                --border: #e5e5e5;
+                --border-mid: #d5d5d5;
+                --radius: 8px;
+            }
 
-    .preview {
-      background: var(--bg-base);
-      color: var(--text-primary);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      overflow: hidden;
-      transition: background .15s, color .15s, border-color .15s;
-    }
-    .preview-titlebar {
-      display: flex; align-items: center; gap: 6px;
-      padding: 8px 10px;
-      background: var(--bg-surface);
-      border-bottom: 1px solid var(--border);
-    }
-    .preview-dot { width: 10px; height: 10px; border-radius: 50%; }
-    .preview-body { display: flex; height: 260px; }
-    .preview-sidebar {
-      width: 150px; min-width: 150px;
-      background: var(--bg-surface);
-      border-right: 1px solid var(--border);
-      padding: 8px 0;
-    }
-    .preview-sidebar-label {
-      font-size: 10px; font-weight: 600; letter-spacing: .04em;
-      color: var(--text-muted); padding: 4px 10px 6px;
-    }
-    .preview-conn {
-      display: flex; align-items: center; gap: 6px;
-      padding: 5px 10px; font-size: 11px; font-weight: 500;
-      color: var(--text-secondary); border-radius: var(--radius); margin: 0 4px;
-    }
-    .preview-conn.active {
-      color: var(--text-primary);
-      background: color-mix(in srgb, var(--accent) 16%, var(--bg-surface));
-    }
-    .preview-conn .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-    .preview-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-    .preview-tabs {
-      display: flex; gap: 2px; padding: 6px 6px 0;
-      background: var(--bg-surface); border-bottom: 1px solid var(--border);
-    }
-    .preview-tab {
-      padding: 5px 10px; font-size: 10.5px; font-weight: 500;
-      color: var(--text-secondary); border-radius: 6px 6px 0 0;
-    }
-    .preview-tab.active { color: var(--text-primary); background: var(--bg-base); }
-    .preview-grid { flex: 1; overflow: hidden; font-size: 10.5px; }
-    .preview-grid table { width: 100%; border-collapse: collapse; }
-    .preview-grid th {
-      background: var(--bg-overlay); color: var(--text-secondary);
-      text-align: left; font-weight: 600; padding: 5px 8px;
-      border-bottom: 1px solid var(--border-mid); border-right: 1px solid var(--border);
-    }
-    .preview-grid td {
-      padding: 4px 8px; color: var(--text-primary);
-      border-bottom: 1px solid var(--border); border-right: 1px solid var(--border);
-    }
-    .preview-grid tr.sel td { background: color-mix(in srgb, var(--accent) 16%, var(--bg-base)); }
-    .preview-grid .num { color: var(--accent-cyan); }
-    .preview-grid .bool-true { color: var(--accent-green); font-weight: 600; }
-    .preview-grid .null { color: var(--text-faint); font-style: italic; }
-    .preview-status {
-      display: flex; align-items: center; gap: 6px;
-      padding: 4px 10px; font-size: 10px; color: var(--text-muted);
-      background: var(--bg-surface); border-top: 1px solid var(--border);
-    }
-    .preview-status .status-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent-green); }
+            .preview {
+                background: var(--bg-base);
+                color: var(--text-primary);
+                border: 1px solid var(--border);
+                border-radius: 10px;
+                overflow: hidden;
+                transition:
+                    background 0.15s,
+                    color 0.15s,
+                    border-color 0.15s;
+            }
+            .preview-titlebar {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                padding: 8px 10px;
+                background: var(--bg-surface);
+                border-bottom: 1px solid var(--border);
+            }
+            .preview-dot {
+                width: 10px;
+                height: 10px;
+                border-radius: 50%;
+            }
+            .preview-body {
+                display: flex;
+                height: 260px;
+            }
+            .preview-sidebar {
+                width: 150px;
+                min-width: 150px;
+                background: var(--bg-surface);
+                border-right: 1px solid var(--border);
+                padding: 8px 0;
+            }
+            .preview-sidebar-label {
+                font-size: 10px;
+                font-weight: 600;
+                letter-spacing: 0.04em;
+                color: var(--text-muted);
+                padding: 4px 10px 6px;
+            }
+            .preview-conn {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                padding: 5px 10px;
+                font-size: 11px;
+                font-weight: 500;
+                color: var(--text-secondary);
+                border-radius: var(--radius);
+                margin: 0 4px;
+            }
+            .preview-conn.active {
+                color: var(--text-primary);
+                background: color-mix(
+                    in srgb,
+                    var(--accent) 16%,
+                    var(--bg-surface)
+                );
+            }
+            .preview-conn .dot {
+                width: 6px;
+                height: 6px;
+                border-radius: 50%;
+                flex-shrink: 0;
+            }
+            .preview-main {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                min-width: 0;
+            }
+            .preview-tabs {
+                display: flex;
+                gap: 2px;
+                padding: 6px 6px 0;
+                background: var(--bg-surface);
+                border-bottom: 1px solid var(--border);
+            }
+            .preview-tab {
+                padding: 5px 10px;
+                font-size: 10.5px;
+                font-weight: 500;
+                color: var(--text-secondary);
+                border-radius: 6px 6px 0 0;
+            }
+            .preview-tab.active {
+                color: var(--text-primary);
+                background: var(--bg-base);
+            }
+            .preview-grid {
+                flex: 1;
+                overflow: hidden;
+                font-size: 10.5px;
+            }
+            .preview-grid table {
+                width: 100%;
+                border-collapse: collapse;
+            }
+            .preview-grid th {
+                background: var(--bg-overlay);
+                color: var(--text-secondary);
+                text-align: left;
+                font-weight: 600;
+                padding: 5px 8px;
+                border-bottom: 1px solid var(--border-mid);
+                border-right: 1px solid var(--border);
+            }
+            .preview-grid td {
+                padding: 4px 8px;
+                color: var(--text-primary);
+                border-bottom: 1px solid var(--border);
+                border-right: 1px solid var(--border);
+            }
+            .preview-grid tr.sel td {
+                background: color-mix(
+                    in srgb,
+                    var(--accent) 16%,
+                    var(--bg-base)
+                );
+            }
+            .preview-grid .num {
+                color: var(--accent-cyan);
+            }
+            .preview-grid .bool-true {
+                color: var(--accent-green);
+                font-weight: 600;
+            }
+            .preview-grid .null {
+                color: var(--text-faint);
+                font-style: italic;
+            }
+            .preview-status {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                padding: 4px 10px;
+                font-size: 10px;
+                color: var(--text-muted);
+                background: var(--bg-surface);
+                border-top: 1px solid var(--border);
+            }
+            .preview-status .status-dot {
+                width: 5px;
+                height: 5px;
+                border-radius: 50%;
+                background: var(--accent-green);
+            }
 
-    .theme-pill {
-      display: flex; align-items: center; gap: 6px;
-      padding: 6px 12px; border-radius: 999px;
-      border: 1px solid #262626;
-      font-size: 12px; font-weight: 500;
-      color: #a3a3a3;
-      cursor: pointer; transition: border-color .15s, color .15s;
-    }
-    .theme-pill:hover { color: #e5e5e5; }
-    .theme-pill.active {
-      color: #fafafa;
-      border-color: #4ade80;
-    }
-    .theme-pill .swatch { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-  </style>
-</head>
-<body class="bg-neutral-950 text-neutral-200">
+            .theme-pill {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                padding: 6px 12px;
+                border-radius: 999px;
+                border: 1px solid #262626;
+                font-size: 12px;
+                font-weight: 500;
+                color: #a3a3a3;
+                cursor: pointer;
+                transition:
+                    border-color 0.15s,
+                    color 0.15s;
+            }
+            .theme-pill:hover {
+                color: #e5e5e5;
+            }
+            .theme-pill.active {
+                color: #fafafa;
+                border-color: #4ade80;
+            }
+            .theme-pill .swatch {
+                width: 9px;
+                height: 9px;
+                border-radius: 50%;
+                flex-shrink: 0;
+            }
+        </style>
+    </head>
+    <body class="bg-neutral-950 text-neutral-200">
+        <!-- Nav -->
+        <header class="border-b border-neutral-800">
+            <div
+                class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between"
+            >
+                <div class="flex items-center gap-2">
+                    <span class="text-green-400 text-lg">&gt;_</span>
+                    <span class="font-bold text-white tracking-tight"
+                        >DBKonn</span
+                    >
+                </div>
+                <a
+                    href="https://github.com/tumugide/DBKonn"
+                    target="_blank"
+                    rel="noopener"
+                    class="text-sm text-neutral-400 hover:text-green-400 transition-colors"
+                    >GitHub</a
+                >
+            </div>
+        </header>
 
-  <!-- Nav -->
-  <header class="border-b border-neutral-800">
-    <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <span class="text-green-400 text-lg">&gt;_</span>
-        <span class="font-bold text-white tracking-tight">DBKonn</span>
-      </div>
-      <a href="https://github.com/tumugide/DBKonn" target="_blank" rel="noopener"
-         class="text-sm text-neutral-400 hover:text-green-400 transition-colors">GitHub</a>
-    </div>
-  </header>
+        <!-- Hero -->
+        <section class="max-w-5xl mx-auto px-6 py-20 text-center">
+            <p class="text-green-400 text-sm mb-3">
+                $ welcome to dbkonn --version 0.1.2
+            </p>
+            <h1
+                class="text-4xl md:text-5xl font-extrabold text-white tracking-tight mb-4"
+            >
+                A native macOS database client<br class="hidden md:block" />
+                with a retro terminal aesthetic.
+            </h1>
+            <p class="text-neutral-400 max-w-2xl mx-auto mb-10">
+                Connect to PostgreSQL, MySQL, SQLite, or SQL Server. Browse
+                schemas and tables, filter rows, edit records inline, and run
+                SQL — all from a single desktop app.
+            </p>
 
-  <!-- Hero -->
-  <section class="max-w-5xl mx-auto px-6 py-20 text-center">
-    <p class="text-green-400 text-sm mb-3">$ welcome to dbkonn --version 0.1.1</p>
-    <h1 class="text-4xl md:text-5xl font-extrabold text-white tracking-tight mb-4">
-      A native macOS database client<br class="hidden md:block" /> with a retro terminal aesthetic.
-    </h1>
-    <p class="text-neutral-400 max-w-2xl mx-auto mb-10">
-      Connect to PostgreSQL, MySQL, SQLite, or SQL Server. Browse schemas and tables,
-      filter rows, edit records inline, and run SQL — all from a single desktop app.
-    </p>
+            <div class="flex flex-col items-center gap-3">
+                <a
+                    href="appbuilds/DBKonn_0.1.2_aarch64.dmg"
+                    download
+                    class="inline-flex items-center gap-2 bg-green-500 hover:bg-green-400 text-neutral-950 font-bold px-6 py-3 rounded-lg transition-colors"
+                >
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        class="w-5 h-5"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"
+                        />
+                    </svg>
+                    Download for Apple Silicon (.dmg)
+                </a>
+                <span class="text-xs text-neutral-500"
+                    >v0.1.2 · macOS (M1/M2/M3/M4) · Intel &amp; Windows/Linux
+                    coming soon</span
+                >
+            </div>
+        </section>
 
-    <div class="flex flex-col items-center gap-3">
-      <a href="appbuilds/DBKonn_0.1.1_aarch64.dmg" download
-         class="inline-flex items-center gap-2 bg-green-500 hover:bg-green-400 text-neutral-950 font-bold px-6 py-3 rounded-lg transition-colors">
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16" />
-        </svg>
-        Download for Apple Silicon (.dmg)
-      </a>
-      <span class="text-xs text-neutral-500">v0.1.1 · macOS (M1/M2/M3/M4) · Intel &amp; Windows/Linux coming soon</span>
-    </div>
-  </section>
+        <!-- Info -->
+        <section
+            class="max-w-5xl mx-auto px-6 py-16 border-t border-neutral-800"
+        >
+            <h2 class="text-xl font-bold text-white mb-8 text-center">
+                Features
+            </h2>
+            <div class="grid sm:grid-cols-2 md:grid-cols-3 gap-6">
+                <div class="border border-neutral-800 rounded-lg p-5">
+                    <h3 class="text-green-400 font-bold mb-1">
+                        Multi-engine support
+                    </h3>
+                    <p class="text-sm text-neutral-400">
+                        PostgreSQL, MySQL/MariaDB, SQLite, and Microsoft SQL
+                        Server.
+                    </p>
+                </div>
+                <div class="border border-neutral-800 rounded-lg p-5">
+                    <h3 class="text-green-400 font-bold mb-1">
+                        Connection manager
+                    </h3>
+                    <p class="text-sm text-neutral-400">
+                        Save profiles; passwords stored securely in the macOS
+                        Keychain.
+                    </p>
+                </div>
+                <div class="border border-neutral-800 rounded-lg p-5">
+                    <h3 class="text-green-400 font-bold mb-1">
+                        Schema browser
+                    </h3>
+                    <p class="text-sm text-neutral-400">
+                        Databases, schemas, and tables laid out in a sidebar
+                        tree.
+                    </p>
+                </div>
+                <div class="border border-neutral-800 rounded-lg p-5">
+                    <h3 class="text-green-400 font-bold mb-1">Data grid</h3>
+                    <p class="text-sm text-neutral-400">
+                        Virtual-scrolled table view with sorting and pagination.
+                    </p>
+                </div>
+                <div class="border border-neutral-800 rounded-lg p-5">
+                    <h3 class="text-green-400 font-bold mb-1">Record editor</h3>
+                    <p class="text-sm text-neutral-400">
+                        View and edit rows with type-aware fields,
+                        commit/rollback.
+                    </p>
+                </div>
+                <div class="border border-neutral-800 rounded-lg p-5">
+                    <h3 class="text-green-400 font-bold mb-1">SQL editor</h3>
+                    <p class="text-sm text-neutral-400">
+                        CodeMirror 6 with dialect-aware syntax highlighting.
+                    </p>
+                </div>
+            </div>
+        </section>
 
-  <!-- Info -->
-  <section class="max-w-5xl mx-auto px-6 py-16 border-t border-neutral-800">
-    <h2 class="text-xl font-bold text-white mb-8 text-center">Features</h2>
-    <div class="grid sm:grid-cols-2 md:grid-cols-3 gap-6">
-      <div class="border border-neutral-800 rounded-lg p-5">
-        <h3 class="text-green-400 font-bold mb-1">Multi-engine support</h3>
-        <p class="text-sm text-neutral-400">PostgreSQL, MySQL/MariaDB, SQLite, and Microsoft SQL Server.</p>
-      </div>
-      <div class="border border-neutral-800 rounded-lg p-5">
-        <h3 class="text-green-400 font-bold mb-1">Connection manager</h3>
-        <p class="text-sm text-neutral-400">Save profiles; passwords stored securely in the macOS Keychain.</p>
-      </div>
-      <div class="border border-neutral-800 rounded-lg p-5">
-        <h3 class="text-green-400 font-bold mb-1">Schema browser</h3>
-        <p class="text-sm text-neutral-400">Databases, schemas, and tables laid out in a sidebar tree.</p>
-      </div>
-      <div class="border border-neutral-800 rounded-lg p-5">
-        <h3 class="text-green-400 font-bold mb-1">Data grid</h3>
-        <p class="text-sm text-neutral-400">Virtual-scrolled table view with sorting and pagination.</p>
-      </div>
-      <div class="border border-neutral-800 rounded-lg p-5">
-        <h3 class="text-green-400 font-bold mb-1">Record editor</h3>
-        <p class="text-sm text-neutral-400">View and edit rows with type-aware fields, commit/rollback.</p>
-      </div>
-      <div class="border border-neutral-800 rounded-lg p-5">
-        <h3 class="text-green-400 font-bold mb-1">SQL editor</h3>
-        <p class="text-sm text-neutral-400">CodeMirror 6 with dialect-aware syntax highlighting.</p>
-      </div>
-    </div>
-  </section>
+        <!-- Theming -->
+        <section
+            class="max-w-5xl mx-auto px-6 py-16 border-t border-neutral-800"
+        >
+            <h2 class="text-xl font-bold text-white mb-2 text-center">
+                Theming
+            </h2>
+            <p class="text-sm text-neutral-400 text-center mb-8">
+                7 built-in themes. Switch anytime from the appearance menu —
+                here's a live preview.
+            </p>
 
-  <!-- Theming -->
-  <section class="max-w-5xl mx-auto px-6 py-16 border-t border-neutral-800">
-    <h2 class="text-xl font-bold text-white mb-2 text-center">Theming</h2>
-    <p class="text-sm text-neutral-400 text-center mb-8">
-      7 built-in themes. Switch anytime from the appearance menu — here's a live preview.
-    </p>
+            <div
+                id="theme-pills"
+                class="flex flex-wrap justify-center gap-2 mb-8"
+            >
+                <button class="theme-pill" data-theme-choice="bios">
+                    <span class="swatch" style="background: #33ff33"></span>BIOS
+                </button>
+                <button class="theme-pill" data-theme-choice="monokai">
+                    <span class="swatch" style="background: #a6e22e"></span
+                    >Monokai
+                </button>
+                <button class="theme-pill active" data-theme-choice="dark">
+                    <span class="swatch" style="background: #4a9eff"></span>Dark
+                </button>
+                <button class="theme-pill" data-theme-choice="light">
+                    <span class="swatch" style="background: #2563eb"></span
+                    >Light
+                </button>
+                <button class="theme-pill" data-theme-choice="catppuccin">
+                    <span class="swatch" style="background: #cba6f7"></span
+                    >Catppuccin
+                </button>
+                <button class="theme-pill" data-theme-choice="ayu-dark">
+                    <span class="swatch" style="background: #ff8a3c"></span>Ayu
+                    Dark
+                </button>
+                <button class="theme-pill" data-theme-choice="ayu-light">
+                    <span class="swatch" style="background: #ff8a3c"></span>Ayu
+                    Light
+                </button>
+            </div>
 
-    <div id="theme-pills" class="flex flex-wrap justify-center gap-2 mb-8">
-      <button class="theme-pill" data-theme-choice="bios"><span class="swatch" style="background:#33ff33"></span>BIOS</button>
-      <button class="theme-pill" data-theme-choice="monokai"><span class="swatch" style="background:#a6e22e"></span>Monokai</button>
-      <button class="theme-pill active" data-theme-choice="dark"><span class="swatch" style="background:#4a9eff"></span>Dark</button>
-      <button class="theme-pill" data-theme-choice="light"><span class="swatch" style="background:#2563eb"></span>Light</button>
-      <button class="theme-pill" data-theme-choice="catppuccin"><span class="swatch" style="background:#cba6f7"></span>Catppuccin</button>
-      <button class="theme-pill" data-theme-choice="ayu-dark"><span class="swatch" style="background:#ff8a3c"></span>Ayu Dark</button>
-      <button class="theme-pill" data-theme-choice="ayu-light"><span class="swatch" style="background:#ff8a3c"></span>Ayu Light</button>
-    </div>
+            <div class="preview max-w-2xl mx-auto shadow-2xl" data-theme="dark">
+                <div class="preview-titlebar">
+                    <span
+                        class="preview-dot"
+                        style="background: #ff5f57"
+                    ></span>
+                    <span
+                        class="preview-dot"
+                        style="background: #febc2e"
+                    ></span>
+                    <span
+                        class="preview-dot"
+                        style="background: #28c840"
+                    ></span>
+                </div>
+                <div class="preview-body">
+                    <div class="preview-sidebar">
+                        <div class="preview-sidebar-label">Connections</div>
+                        <div class="preview-conn active">
+                            <span class="dot" style="background: #4a9eff"></span
+                            >prod-postgres
+                        </div>
+                        <div class="preview-conn">
+                            <span class="dot" style="background: #8a8986"></span
+                            >staging-mysql
+                        </div>
+                        <div class="preview-conn">
+                            <span class="dot" style="background: #8a8986"></span
+                            >local.sqlite
+                        </div>
+                        <div
+                            class="preview-sidebar-label"
+                            style="margin-top: 8px"
+                        >
+                            Tables
+                        </div>
+                        <div class="preview-conn">users</div>
+                        <div class="preview-conn active">orders</div>
+                        <div class="preview-conn">products</div>
+                    </div>
+                    <div class="preview-main">
+                        <div class="preview-tabs">
+                            <div class="preview-tab active">orders</div>
+                            <div class="preview-tab">query.sql</div>
+                        </div>
+                        <div class="preview-grid">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>id</th>
+                                        <th>customer</th>
+                                        <th>total</th>
+                                        <th>paid</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr class="sel">
+                                        <td class="num">1042</td>
+                                        <td>A. Nkurunziza</td>
+                                        <td class="num">89.50</td>
+                                        <td class="bool-true">true</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="num">1043</td>
+                                        <td>B. Uwimana</td>
+                                        <td class="num">14.00</td>
+                                        <td class="bool-true">true</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="num">1044</td>
+                                        <td>C. Habimana</td>
+                                        <td class="null">null</td>
+                                        <td>false</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="preview-status">
+                            <span class="status-dot"></span>Connected · 3 rows
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
 
-    <div class="preview max-w-2xl mx-auto shadow-2xl" data-theme="dark">
-      <div class="preview-titlebar">
-        <span class="preview-dot" style="background:#ff5f57"></span>
-        <span class="preview-dot" style="background:#febc2e"></span>
-        <span class="preview-dot" style="background:#28c840"></span>
-      </div>
-      <div class="preview-body">
-        <div class="preview-sidebar">
-          <div class="preview-sidebar-label">Connections</div>
-          <div class="preview-conn active"><span class="dot" style="background:#4a9eff"></span>prod-postgres</div>
-          <div class="preview-conn"><span class="dot" style="background:#8a8986"></span>staging-mysql</div>
-          <div class="preview-conn"><span class="dot" style="background:#8a8986"></span>local.sqlite</div>
-          <div class="preview-sidebar-label" style="margin-top:8px">Tables</div>
-          <div class="preview-conn">users</div>
-          <div class="preview-conn active">orders</div>
-          <div class="preview-conn">products</div>
-        </div>
-        <div class="preview-main">
-          <div class="preview-tabs">
-            <div class="preview-tab active">orders</div>
-            <div class="preview-tab">query.sql</div>
-          </div>
-          <div class="preview-grid">
-            <table>
-              <thead>
-                <tr><th>id</th><th>customer</th><th>total</th><th>paid</th></tr>
-              </thead>
-              <tbody>
-                <tr class="sel"><td class="num">1042</td><td>A. Nkurunziza</td><td class="num">89.50</td><td class="bool-true">true</td></tr>
-                <tr><td class="num">1043</td><td>B. Uwimana</td><td class="num">14.00</td><td class="bool-true">true</td></tr>
-                <tr><td class="num">1044</td><td>C. Habimana</td><td class="null">null</td><td>false</td></tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="preview-status"><span class="status-dot"></span>Connected · 3 rows</div>
-        </div>
-      </div>
-    </div>
-  </section>
+        <!-- Install -->
+        <section
+            class="max-w-5xl mx-auto px-6 py-16 border-t border-neutral-800"
+        >
+            <h2 class="text-xl font-bold text-white mb-6 text-center">
+                Install
+            </h2>
+            <ol
+                class="max-w-xl mx-auto text-sm text-neutral-400 space-y-2 list-decimal list-inside mb-8"
+            >
+                <li>
+                    Open the <span class="text-neutral-200">.dmg</span> and drag
+                    <span class="text-neutral-200">DBKonn</span> into
+                    Applications.
+                </li>
+                <li>
+                    If macOS says the app is "damaged and can't be opened",
+                    right-click it and choose
+                    <span class="text-neutral-200">Open</span>, or run the
+                    command below.
+                </li>
+            </ol>
 
-  <!-- Install -->
-  <section class="max-w-5xl mx-auto px-6 py-16 border-t border-neutral-800">
-    <h2 class="text-xl font-bold text-white mb-6 text-center">Install</h2>
-    <ol class="max-w-xl mx-auto text-sm text-neutral-400 space-y-2 list-decimal list-inside mb-8">
-      <li>Open the <span class="text-neutral-200">.dmg</span> and drag <span class="text-neutral-200">DBKonn</span> into Applications.</li>
-      <li>If macOS says the app is "damaged and can't be opened", right-click it and choose <span class="text-neutral-200">Open</span>, or run the command below.</li>
-    </ol>
+            <div
+                class="bg-black border border-neutral-800 rounded-lg p-5 max-w-xl mx-auto text-sm"
+            >
+                <p class="text-neutral-500 mb-2">
+                    # clear the quarantine attribute
+                </p>
+                <p class="text-green-400">
+                    $ xattr -cr /Applications/DBKonn.app
+                </p>
+            </div>
 
-    <div class="bg-black border border-neutral-800 rounded-lg p-5 max-w-xl mx-auto text-sm">
-      <p class="text-neutral-500 mb-2"># clear the quarantine attribute</p>
-      <p class="text-green-400">$ xattr -cr /Applications/DBKonn.app</p>
-    </div>
+            <div
+                class="bg-black border border-neutral-800 rounded-lg p-5 max-w-xl mx-auto text-sm mt-4"
+            >
+                <p class="text-neutral-500 mb-2">
+                    # still blocked as "damaged"? re-sign locally and clear
+                    quarantine
+                </p>
+                <p class="text-green-400 break-all">
+                    $ codesign --force --deep -s - /Applications/DBKonn.app
+                    &amp;&amp; xattr -rd com.apple.quarantine
+                    /Applications/DBKonn.app
+                </p>
+            </div>
+        </section>
 
-    <div class="bg-black border border-neutral-800 rounded-lg p-5 max-w-xl mx-auto text-sm mt-4">
-      <p class="text-neutral-500 mb-2"># still blocked as "damaged"? re-sign locally and clear quarantine</p>
-      <p class="text-green-400 break-all">$ codesign --force --deep -s - /Applications/DBKonn.app &amp;&amp; xattr -rd com.apple.quarantine /Applications/DBKonn.app</p>
-    </div>
-  </section>
+        <footer
+            class="border-t border-neutral-800 py-8 text-center text-xs text-neutral-600"
+        >
+            MIT License · Built with Tauri 2 + Rust
+        </footer>
 
-  <footer class="border-t border-neutral-800 py-8 text-center text-xs text-neutral-600">
-    MIT License · Built with Tauri 2 + Rust
-  </footer>
-
-  <script>
-    document.getElementById('theme-pills').addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-theme-choice]');
-      if (!btn) return;
-      document.querySelector('.preview').dataset.theme = btn.dataset.themeChoice;
-      document.querySelectorAll('.theme-pill').forEach((p) => p.classList.toggle('active', p === btn));
-    });
-  </script>
-
-</body>
+        <script>
+            document
+                .getElementById("theme-pills")
+                .addEventListener("click", (e) => {
+                    const btn = e.target.closest("[data-theme-choice]");
+                    if (!btn) return;
+                    document.querySelector(".preview").dataset.theme =
+                        btn.dataset.themeChoice;
+                    document
+                        .querySelectorAll(".theme-pill")
+                        .forEach((p) =>
+                            p.classList.toggle("active", p === btn),
+                        );
+                });
+        </script>
+    </body>
 </html>
