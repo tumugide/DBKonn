@@ -95,4 +95,8 @@ export const ipc = {
   saveConnection:      (config: ConnectionConfig)                               => invoke<string>("save_connection", { config }),
   loadConnections:     ()                                                       => invoke<ConnectionConfig[]>("load_connections"),
   deleteConnection:    (connId: string)                                         => invoke<void>("delete_connection", { connId }),
+
+  syncThemeMenu:       (theme: string)                                          => invoke<void>("sync_theme_menu", { theme }),
+  syncQueryMenu:       (tabs: { id: string; title: string }[], activeTabId: string | null) =>
+                         invoke<void>("sync_query_menu", { tabs, activeTabId }),
 };

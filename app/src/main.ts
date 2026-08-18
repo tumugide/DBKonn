@@ -1,4 +1,5 @@
 import "./styles/global.css";
+import { listen } from "@tauri-apps/api/event";
 import { ipc, type ConnectionConfig, type ColumnInfo } from "./lib/ipc";
 import {
   appState,
@@ -95,11 +96,6 @@ function showAppearanceModal() {
 const app = document.getElementById("app")!;
 
 app.innerHTML = `
-  <div class="titlebar">
-    <div class="titlebar-spacer"></div>
-    <button class="btn-icon" id="btn-new-query" title="New query (⌘T)">+ Query</button>
-    <button class="btn-icon" id="btn-appearance" title="Appearance settings">Theme</button>
-  </div>
   <div class="app-layout">
     <aside class="conn-rail" id="conn-rail"></aside>
     <aside class="sidebar" id="sidebar"></aside>
@@ -123,7 +119,6 @@ const statusText = document.getElementById("status-text")!;
 const statusDot = document.getElementById("status-dot")!;
 const themeLabel = document.getElementById("theme-label")!;
 const tabStripEl = document.getElementById("table-tabs-list")!;
-const newQueryBtn = document.getElementById("btn-new-query") as HTMLButtonElement;
 
 appState.status.subscribe((s) => {
   statusText.textContent = s;
@@ -135,14 +130,49 @@ appState.theme.set(savedTheme);
 applyTheme(savedTheme);
 appState.theme.subscribe(applyTheme);
 
-document.getElementById("btn-appearance")!.addEventListener("click", showAppearanceModal);
+// Keep the native "Theme" menu (macOS menu bar) checkmarks in sync with
+// whatever theme is active, whichever side changed it.
+appState.theme.subscribe((theme) => {
+  ipc.syncThemeMenu(theme).catch(() => {});
+});
+ipc.syncThemeMenu(savedTheme).catch(() => {});
+
+// Selecting a theme from the native menu applies it here.
+listen<string>("menu:set-theme", (event) => {
+  const theme = event.payload as ThemeType;
+  if (THEMES[theme] && theme !== appState.theme.value) {
+    appState.theme.set(theme);
+  }
+});
+
 themeLabel.addEventListener("click", showAppearanceModal);
 
-newQueryBtn.addEventListener("click", () => openQueryTab());
-appState.activeConn.subscribe((ac) => {
-  newQueryBtn.disabled = !ac;
-});
-newQueryBtn.disabled = !appState.activeConn.value;
+// Keep the native "Query" menu (macOS menu bar) in sync with the query tabs
+// open on the active connection, so it can offer "New Query" plus a list of
+// the other query tabs to jump to.
+function syncQueryMenuFromState() {
+  const ac = appState.activeConn.value;
+  if (!ac) {
+    ipc.syncQueryMenu([], null).catch(() => {});
+    return;
+  }
+  const tabs = appState.openTabs.value
+    .filter((t): t is QueryTab => t.kind === "query" && t.connId === ac.connId)
+    .map((t) => ({ id: t.id, title: t.title, number: Number(t.title.match(/\d+/)?.[0] ?? 0) }))
+    .sort((a, b) => a.number - b.number)
+    .map(({ id, title }) => ({ id, title }));
+  ipc.syncQueryMenu(tabs, appState.activeTab.value).catch(() => {});
+}
+appState.openTabs.subscribe(syncQueryMenuFromState);
+appState.activeTab.subscribe(syncQueryMenuFromState);
+appState.activeConnId.subscribe(syncQueryMenuFromState);
+syncQueryMenuFromState();
+
+// "New Query" from the native menu — same behavior as the tab-strip "+" button.
+listen("menu:new-query", () => openQueryTab());
+
+// Selecting a query tab from the native menu switches to it.
+listen<string>("menu:switch-query-tab", (event) => switchToTab(event.payload));
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 

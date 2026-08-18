@@ -226,3 +226,57 @@ pub async fn delete_connection(
 
     Ok(())
 }
+
+// ── Menu sync ──────────────────────────────────────────────────────────────────
+
+/// Keeps the native "Theme" menu's check marks in sync with the theme
+/// selected in the webview (on boot and whenever it changes in-app).
+/// No-op on platforms without the custom menu (the item map is empty).
+#[tauri::command]
+pub fn sync_theme_menu(state: State<AppState>, theme: String) {
+    let items = state.theme_menu_items.lock().unwrap();
+    for (id, item) in items.iter() {
+        let _ = item.set_checked(*id == theme);
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct QueryTabMenuInfo {
+    id: String,
+    title: String,
+}
+
+/// Rebuilds the native "Query" menu's list of open query tabs for the active
+/// connection (already ordered by tab number by the caller), checking off
+/// whichever one is active. No-op on platforms without the custom menu.
+#[tauri::command]
+pub fn sync_query_menu(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    tabs: Vec<QueryTabMenuInfo>,
+    active_tab_id: Option<String>,
+) {
+    let Some(query_menu) = state.query_menu.lock().unwrap().clone() else {
+        return;
+    };
+
+    let mut items = state.query_tab_items.lock().unwrap();
+    for (_, item) in items.drain() {
+        let _ = query_menu.remove(&item);
+    }
+
+    for tab in tabs {
+        let checked = active_tab_id.as_deref() == Some(tab.id.as_str());
+        if let Ok(item) = tauri::menu::CheckMenuItem::with_id(
+            &app,
+            format!("query-tab:{}", tab.id),
+            tab.title,
+            true,
+            checked,
+            None::<&str>,
+        ) {
+            let _ = query_menu.append(&item);
+            items.insert(tab.id, item);
+        }
+    }
+}

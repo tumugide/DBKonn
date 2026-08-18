@@ -401,29 +401,6 @@ body {
     background: var(--bg-base);
 }
 
-/* ── Titlebar / toolbar ──────────────────────────────────────────────────── */
-/* macOS draws the real title bar + traffic lights (decorations:true in
-   tauri.conf.json); this is a plain secondary toolbar strip below it. */
-.titlebar {
-    height: 38px;
-    min-height: 38px;
-    background: var(--bg-surface);
-    border-bottom: 1px solid var(--border);
-    color: var(--text-primary);
-    display: flex;
-    align-items: center;
-    padding: 0 10px;
-    -webkit-app-region: drag;
-    user-select: none;
-    gap: 6px;
-}
-.titlebar-spacer {
-    flex: 1;
-}
-.titlebar .btn-icon {
-    -webkit-app-region: no-drag;
-}
-
 /* ── Sidebar header bar ──────────────────────────────────────────────────── */
 .sidebar-header {
     padding: 8px 10px;

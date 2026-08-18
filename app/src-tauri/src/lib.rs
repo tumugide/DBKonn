@@ -1,9 +1,111 @@
 mod commands;
 mod connections;
 mod state;
+mod updater;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tracing_subscriber::EnvFilter;
+
+/// Theme ids/labels, kept in sync with `app/src/lib/store.ts`'s `THEMES` map.
+#[cfg(target_os = "macos")]
+const THEMES: &[(&str, &str)] = &[
+    ("bios", "BIOS"),
+    ("monokai", "Monokai"),
+    ("dark", "Dark"),
+    ("light", "Light"),
+    ("catppuccin", "Catppuccin"),
+    ("ayu-dark", "Ayu Dark"),
+    ("ayu-light", "Ayu Light"),
+];
+
+#[cfg(target_os = "macos")]
+fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{
+        AboutMetadataBuilder, CheckMenuItem, MenuBuilder, MenuItemBuilder, SubmenuBuilder,
+    };
+
+    let check_for_updates = MenuItemBuilder::with_id("check_for_updates", "Check for Updates…")
+        .build(app)?;
+
+    let app_menu = SubmenuBuilder::new(app, "DBKonn")
+        .about(Some(
+            AboutMetadataBuilder::new()
+                .name(Some("DBKonn"))
+                .version(Some(app.package_info().version.to_string()))
+                .build(),
+        ))
+        .separator()
+        .item(&check_for_updates)
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+
+    let edit_menu = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+
+    let view_menu = SubmenuBuilder::new(app, "View").fullscreen().build()?;
+
+    let window_menu = SubmenuBuilder::new(app, "Window")
+        .minimize()
+        .close_window()
+        .build()?;
+
+    let new_query_item = MenuItemBuilder::with_id("query:new", "New Query").build(app)?;
+    let query_menu = SubmenuBuilder::new(app, "Query")
+        .item(&new_query_item)
+        .separator()
+        .build()?;
+    *app.state::<state::AppState>().query_menu.lock().unwrap() = Some(query_menu.clone());
+
+    let theme_menu = SubmenuBuilder::new(app, "Theme").build()?;
+    let mut theme_items = std::collections::HashMap::new();
+    for (id, label) in THEMES {
+        let item = CheckMenuItem::with_id(
+            app,
+            format!("theme:{id}"),
+            *label,
+            true,
+            *id == "bios",
+            None::<&str>,
+        )?;
+        theme_menu.append(&item)?;
+        theme_items.insert(id.to_string(), item);
+    }
+    *app.state::<state::AppState>().theme_menu_items.lock().unwrap() = theme_items;
+
+    MenuBuilder::new(app)
+        .items(&[
+            &app_menu,
+            &query_menu,
+            &edit_menu,
+            &view_menu,
+            &window_menu,
+            &theme_menu,
+        ])
+        .build()
+}
+
+#[cfg(target_os = "macos")]
+fn set_theme_checked(app: &tauri::AppHandle, theme: &str) {
+    let state = app.state::<state::AppState>();
+    let items = state.theme_menu_items.lock().unwrap();
+    for (id, item) in items.iter() {
+        let _ = item.set_checked(id == theme);
+    }
+}
 
 pub fn run() {
     tracing_subscriber::fmt()
@@ -32,8 +134,33 @@ pub fn run() {
             commands::load_connections,
             commands::delete_connection,
             commands::get_active_connections,
+            commands::sync_theme_menu,
+            commands::sync_query_menu,
         ])
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            {
+                let menu = build_menu(app)?;
+                app.set_menu(menu)?;
+
+                app.on_menu_event(|app, event| {
+                    let id = event.id().as_ref();
+                    if id == "check_for_updates" {
+                        let app_handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            updater::check_for_updates(app_handle).await;
+                        });
+                    } else if let Some(theme) = id.strip_prefix("theme:") {
+                        set_theme_checked(app, theme);
+                        let _ = app.emit("menu:set-theme", theme);
+                    } else if id == "query:new" {
+                        let _ = app.emit("menu:new-query", ());
+                    } else if let Some(tab_id) = id.strip_prefix("query-tab:") {
+                        let _ = app.emit("menu:switch-query-tab", tab_id);
+                    }
+                });
+            }
+
             #[cfg(debug_assertions)]
             {
                 let window = app.get_webview_window("main").unwrap();
