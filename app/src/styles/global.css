@@ -1279,6 +1279,14 @@ label {
     word-break: break-word;
     font-family: var(--font-family);
 }
+/* Fields with content long enough for a textarea are JSON-formatted
+   when the underlying value is an object — keep that monospace/taller
+   styling even though .record-field-text is declared after it above. */
+.record-field-text.record-field-json {
+    font-size: 11.5px;
+    font-family: var(--font-mono);
+    min-height: 48px;
+}
 .record-null-check {
     display: inline-flex;
     align-items: center;

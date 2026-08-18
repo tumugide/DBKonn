@@ -177,19 +177,27 @@ export class RecordPanel {
               <option value="true" ${val ? "selected" : ""}>true</option>
               <option value="false" ${!val ? "selected" : ""}>false</option>
             </select>`;
-        } else if (typeof val === "object" && val !== null) {
-          inputHtml = `
-            <textarea class="record-field-input record-field-json" data-idx="${idx}"
-              rows="3" ${disabled ? "disabled" : ""}>${esc(formatDisplayValue(val))}</textarea>`;
         } else if (typeof val === "number") {
           inputHtml = `
             <input class="record-field-input" data-idx="${idx}" type="text"
               value="${esc(formatDisplayValue(val))}"
               ${disabled ? "disabled" : ""} />`;
         } else {
-          inputHtml = `
-            <textarea class="record-field-input record-field-text" data-idx="${idx}"
-              rows="1" ${disabled ? "disabled" : ""}>${esc(formatDisplayValue(val))}</textarea>`;
+          // Whether a field gets a textarea is purely a function of how much
+          // content it holds, not its column data type — a short JSON blob
+          // gets a plain input, a long plain-text value gets a textarea.
+          const text = formatDisplayValue(val);
+          if (text.length > 36) {
+            const isJson = typeof val === "object" && val !== null;
+            inputHtml = `
+              <textarea class="record-field-input record-field-text${isJson ? " record-field-json" : ""}" data-idx="${idx}"
+                rows="3" ${disabled ? "disabled" : ""}>${esc(text)}</textarea>`;
+          } else {
+            inputHtml = `
+              <input class="record-field-input" data-idx="${idx}" type="text"
+                value="${esc(text)}"
+                ${disabled ? "disabled" : ""} />`;
+          }
         }
 
         const nullCheck =
