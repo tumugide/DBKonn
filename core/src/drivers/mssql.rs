@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use async_trait::async_trait;
-use tiberius::{AuthMethod, Client, Config, Row};
+use tiberius::{AuthMethod, Client, ColumnType, Config, FromSql, Row};
 use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
@@ -34,6 +34,8 @@ impl MssqlDriver {
         tib_config.authentication(AuthMethod::sql_server(user, pass));
 
         // Trust server cert for development; flag in UI for production use
+        // TODO: this ignores `config.ssl_mode` entirely — wire up proper cert
+        // validation when ssl_mode is Require.
         tib_config.trust_cert();
 
         // Test connect to ensure credentials are valid
@@ -52,6 +54,9 @@ impl MssqlDriver {
         })
     }
 
+    // TODO: opens a fresh TCP connection + tiberius handshake on every call —
+    // no connection pooling. Fine for now, but a real perf/resource concern
+    // under load.
     async fn get_client(&self) -> Result<Client<tokio_util::compat::Compat<TcpStream>>, CoreError> {
         let tcp = TcpStream::connect(self.config.get_addr())
             .await
@@ -64,50 +69,133 @@ impl MssqlDriver {
     }
 }
 
-/// Extract typed values from a tiberius Row.
-/// tiberius Row::get() returns Option<T> (not Result).
+/// Extract typed values from a tiberius Row, dispatching on each column's
+/// actual TDS type so we always request the matching Rust type from
+/// `try_get`. NEVER use `Row::get()` here: it panics via an internal
+/// `.unwrap()` whenever the requested type doesn't match the column's real
+/// type (tiberius's `FromSql::from_sql` returns `Err`, not `Ok(None)`, on a
+/// type mismatch) — blindly trying `&str` first on every column, as this
+/// function used to, panics on any non-string column (an INT id, a BIT flag,
+/// any datetime, etc.), i.e. on nearly every real query.
 fn tiberius_row_to_values(row: &Row) -> Vec<RowValue> {
-    (0..row.len())
-        .map(|i| {
-            // Try string first
-            if let Some(s) = row.get::<&str, _>(i) {
-                return RowValue::Text(s.to_string());
-            }
-            if let Some(v) = row.get::<i64, _>(i) {
-                return RowValue::Integer(v);
-            }
-            if let Some(v) = row.get::<i32, _>(i) {
-                return RowValue::Integer(v as i64);
-            }
-            if let Some(v) = row.get::<i16, _>(i) {
-                return RowValue::Integer(v as i64);
-            }
-            if let Some(v) = row.get::<f64, _>(i) {
-                return RowValue::Float(v);
-            }
-            if let Some(v) = row.get::<f32, _>(i) {
-                return RowValue::Float(v as f64);
-            }
-            if let Some(v) = row.get::<bool, _>(i) {
-                return RowValue::Bool(v);
-            }
-            if let Some(b) = row.get::<&[u8], _>(i) {
-                let preview: String = b
-                    .iter()
-                    .take(16)
-                    .map(|byte| format!("{:02x}", byte))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let suffix = if b.len() > 16 {
-                    format!("… ({} bytes)", b.len())
-                } else {
-                    String::new()
-                };
-                return RowValue::Binary(format!("0x{}{}", preview, suffix));
-            }
-            RowValue::Null
-        })
+    row.columns()
+        .iter()
+        .enumerate()
+        .map(|(i, col)| tiberius_cell_to_row_value(row, i, col.column_type()))
         .collect()
+}
+
+/// Decode a single tiberius cell into a `RowValue`, dispatching on the
+/// column's actual `ColumnType`. Uses `try_get` throughout (never the
+/// panicking `get`), so a decode error becomes `RowValue::Null` (logged)
+/// instead of crashing the query.
+fn tiberius_cell_to_row_value(row: &Row, i: usize, col_type: ColumnType) -> RowValue {
+    fn decode<'a, T, F>(row: &'a Row, i: usize, f: F) -> RowValue
+    where
+        T: FromSql<'a>,
+        F: FnOnce(T) -> RowValue,
+    {
+        match row.try_get::<T, _>(i) {
+            Ok(Some(v)) => f(v),
+            Ok(None) => RowValue::Null,
+            Err(e) => {
+                tracing::warn!("mssql: column {} decode error: {}", i, e);
+                RowValue::Null
+            }
+        }
+    }
+
+    fn binary_preview(b: &[u8]) -> RowValue {
+        let preview: String = b
+            .iter()
+            .take(16)
+            .map(|byte| format!("{:02x}", byte))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let suffix = if b.len() > 16 {
+            format!("… ({} bytes)", b.len())
+        } else {
+            String::new()
+        };
+        RowValue::Binary(format!("0x{}{}", preview, suffix))
+    }
+
+    match col_type {
+        ColumnType::Null => RowValue::Null,
+
+        ColumnType::Bit | ColumnType::Bitn => decode::<bool, _>(row, i, RowValue::Bool),
+
+        ColumnType::Int1 => decode::<u8, _>(row, i, |v| RowValue::Integer(v as i64)),
+        ColumnType::Int2 => decode::<i16, _>(row, i, |v| RowValue::Integer(v as i64)),
+        ColumnType::Int4 => decode::<i32, _>(row, i, |v| RowValue::Integer(v as i64)),
+        ColumnType::Int8 => decode::<i64, _>(row, i, RowValue::Integer),
+        // Variable-width integer of unresolved size — try widest first.
+        ColumnType::Intn => match row.try_get::<i64, _>(i) {
+            Ok(Some(v)) => RowValue::Integer(v),
+            _ => match row.try_get::<i32, _>(i) {
+                Ok(Some(v)) => RowValue::Integer(v as i64),
+                _ => match row.try_get::<i16, _>(i) {
+                    Ok(Some(v)) => RowValue::Integer(v as i64),
+                    _ => match row.try_get::<u8, _>(i) {
+                        Ok(Some(v)) => RowValue::Integer(v as i64),
+                        _ => RowValue::Null,
+                    },
+                },
+            },
+        },
+
+        ColumnType::Float4 => decode::<f32, _>(row, i, |v| RowValue::Float(v as f64)),
+        // Money/Money4 decode into ColumnData::F64 in tiberius, so f64 is the
+        // correct target type — not a separate numeric representation.
+        ColumnType::Float8 | ColumnType::Money | ColumnType::Money4 => {
+            decode::<f64, _>(row, i, RowValue::Float)
+        }
+        ColumnType::Floatn => match row.try_get::<f64, _>(i) {
+            Ok(Some(v)) => RowValue::Float(v),
+            _ => match row.try_get::<f32, _>(i) {
+                Ok(Some(v)) => RowValue::Float(v as f64),
+                _ => RowValue::Null,
+            },
+        },
+
+        ColumnType::Guid => decode::<tiberius::Uuid, _>(row, i, |v| RowValue::Text(v.to_string())),
+
+        // tiberius's own `Numeric` type (unconditionally available) — not
+        // `rust_decimal::Decimal`, which requires tiberius's separate
+        // "rust_decimal" feature that isn't enabled here.
+        ColumnType::Decimaln | ColumnType::Numericn => {
+            decode::<tiberius::numeric::Numeric, _>(row, i, |v| RowValue::Text(v.to_string()))
+        }
+
+        ColumnType::Datetime
+        | ColumnType::Datetime4
+        | ColumnType::Datetimen
+        | ColumnType::Datetime2 => decode::<chrono::NaiveDateTime, _>(row, i, |dt| {
+            RowValue::Text(dt.format("%Y-%m-%d %H:%M:%S%.6f").to_string())
+        }),
+        ColumnType::Daten => decode::<chrono::NaiveDate, _>(row, i, |d| RowValue::Text(d.to_string())),
+        ColumnType::Timen => decode::<chrono::NaiveTime, _>(row, i, |t| RowValue::Text(t.to_string())),
+        ColumnType::DatetimeOffsetn => {
+            decode::<chrono::DateTime<chrono::FixedOffset>, _>(row, i, |dt| {
+                RowValue::Text(dt.to_rfc3339())
+            })
+        }
+
+        ColumnType::BigVarChar
+        | ColumnType::BigChar
+        | ColumnType::NVarchar
+        | ColumnType::NChar
+        | ColumnType::Text
+        | ColumnType::NText => decode::<&str, _>(row, i, |s| RowValue::Text(s.to_string())),
+
+        ColumnType::BigVarBin | ColumnType::BigBinary | ColumnType::Image => {
+            decode::<&[u8], _>(row, i, |b| binary_preview(b))
+        }
+
+        // Xml, Udt, SSVariant: no direct FromSql target wired up — fall
+        // through to Null gracefully rather than crashing.
+        ColumnType::Xml | ColumnType::Udt | ColumnType::SSVariant => RowValue::Null,
+    }
 }
 
 fn tiberius_rows_to_query_result(

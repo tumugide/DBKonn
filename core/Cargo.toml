@@ -18,6 +18,8 @@ chrono.workspace = true
 uuid.workspace = true
 rust_decimal.workspace = true
 tracing.workspace = true
+url.workspace = true
+percent-encoding.workspace = true
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

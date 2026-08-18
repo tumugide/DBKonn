@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["DBKonn"]
 license = "MIT"
@@ -31,8 +31,11 @@ sqlx = { version = "0.8", default-features = false, features = [
 tiberius = { version = "0.12", default-features = false, features = [
     "rustls",
     "chrono",
+    "tds73",
 ] }
 tokio-util = { version = "0.7", features = ["compat"] }
+url = "2"
+percent-encoding = "2"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

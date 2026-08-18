@@ -27,6 +27,7 @@ pub fn run() {
             commands::fetch_table_rows,
             commands::count_rows,
             commands::validate_sql,
+            commands::parse_connection_url,
             commands::save_connection,
             commands::load_connections,
             commands::delete_connection,

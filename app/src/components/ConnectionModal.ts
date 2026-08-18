@@ -39,6 +39,14 @@ export function showConnectionModal(
         </div>
 
         <div class="form-row">
+          <label>Paste Connection URL (optional)</label>
+          <div style="display:flex;gap:6px;">
+            <input id="cm-url" type="text" placeholder="postgres://user:pass@host:5432/db" style="flex:1" />
+            <button class="btn btn-secondary" id="cm-url-parse" type="button">Parse</button>
+          </div>
+        </div>
+
+        <div class="form-row">
           <label>Engine</label>
           <select id="cm-engine" style="width:100%">
             <option value="postgres" ${initial.engine === "postgres" ? "selected" : ""}>PostgreSQL</option>
@@ -124,6 +132,34 @@ export function showConnectionModal(
     netFields.style.display = isSqlite ? "none" : "";
     sqliteFields.style.display = isSqlite ? "" : "none";
     if (!isSqlite) portInput.value = String(DEFAULT_PORTS[eng]);
+  });
+
+  overlay.querySelector("#cm-url-parse")!.addEventListener("click", async () => {
+    const urlStr = overlay.querySelector<HTMLInputElement>("#cm-url")!.value.trim();
+    if (!urlStr) return;
+    try {
+      const parsed = await ipc.parseConnectionUrl(urlStr);
+
+      // Set engine and dispatch its change handler FIRST — that's what flips
+      // net/sqlite field visibility and pre-fills a default port. If we set
+      // fields before this, the change handler's port default would clobber them.
+      engineSel.value = parsed.engine;
+      engineSel.dispatchEvent(new Event("change"));
+
+      if (parsed.engine === "sqlite") {
+        overlay.querySelector<HTMLInputElement>("#cm-filepath")!.value = parsed.file_path ?? "";
+      } else {
+        overlay.querySelector<HTMLInputElement>("#cm-host")!.value = parsed.host ?? "localhost";
+        if (parsed.port != null) portInput.value = String(parsed.port); // else keep the default the change handler just set
+        overlay.querySelector<HTMLInputElement>("#cm-user")!.value = parsed.username ?? "";
+        overlay.querySelector<HTMLInputElement>("#cm-pass")!.value = parsed.password ?? "";
+        overlay.querySelector<HTMLInputElement>("#cm-db")!.value = parsed.database ?? "";
+        overlay.querySelector<HTMLSelectElement>("#cm-ssl")!.value = parsed.ssl_mode;
+      }
+      setStatus("URL parsed — review fields below", "color:var(--accent-green)");
+    } catch (e) {
+      setStatus(`⚠ Could not parse URL: ${e}`, "color:var(--accent-amber)");
+    }
   });
 
   function buildConfig(): ConnectionConfig {

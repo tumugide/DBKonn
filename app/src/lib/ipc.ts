@@ -91,6 +91,7 @@ export const ipc = {
 
   validateSql:         (config: ConnectionConfig, sql: string)                  => invoke<ParseError|null>("validate_sql", { config, sql }),
 
+  parseConnectionUrl:  (url: string)                                            => invoke<ConnectionConfig>("parse_connection_url", { url }),
   saveConnection:      (config: ConnectionConfig)                               => invoke<string>("save_connection", { config }),
   loadConnections:     ()                                                       => invoke<ConnectionConfig[]>("load_connections"),
   deleteConnection:    (connId: string)                                         => invoke<void>("delete_connection", { connId }),

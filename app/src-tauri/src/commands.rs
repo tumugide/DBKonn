@@ -177,6 +177,11 @@ pub async fn validate_sql(
 // ── Connection management ─────────────────────────────────────────────────────
 
 #[tauri::command]
+pub async fn parse_connection_url(url: String) -> Result<ConnectionConfig, String> {
+    ConnectionConfig::from_url(&url).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn save_connection(mut config: ConnectionConfig) -> Result<String, String> {
     // Extract and store password in Keychain, strip from on-disk config
     if let Some(pw) = config.password.take() {
