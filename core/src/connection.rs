@@ -59,10 +59,22 @@ impl ConnectionConfig {
                 let user = self.username.as_deref().unwrap_or("postgres");
                 let db = self.database.as_deref().unwrap_or("postgres");
                 let password = self.password.as_deref().unwrap_or("");
+                // sqlx defaults to SslMode::Prefer when no `sslmode` param is
+                // present, so this must always be spelled out explicitly —
+                // otherwise the UI's SSL Mode selector (including "Disable")
+                // has no effect on the actual connection.
+                let sslmode = match self.ssl_mode {
+                    SslMode::Prefer => "prefer",
+                    SslMode::Require => "require",
+                    SslMode::Disable => "disable",
+                };
                 if password.is_empty() {
-                    format!("postgres://{}@{}:{}/{}", user, host, port, db)
+                    format!("postgres://{}@{}:{}/{}?sslmode={}", user, host, port, db, sslmode)
                 } else {
-                    format!("postgres://{}:{}@{}:{}/{}", user, password, host, port, db)
+                    format!(
+                        "postgres://{}:{}@{}:{}/{}?sslmode={}",
+                        user, password, host, port, db, sslmode
+                    )
                 }
             }
             DbEngine::MySQL => {
@@ -71,10 +83,20 @@ impl ConnectionConfig {
                 let user = self.username.as_deref().unwrap_or("root");
                 let db = self.database.as_deref().unwrap_or("mysql");
                 let password = self.password.as_deref().unwrap_or("");
+                // Same rationale as Postgres above — sqlx-mysql defaults to
+                // Preferred unless `ssl-mode` is spelled out explicitly.
+                let sslmode = match self.ssl_mode {
+                    SslMode::Prefer => "PREFERRED",
+                    SslMode::Require => "REQUIRED",
+                    SslMode::Disable => "DISABLED",
+                };
                 if password.is_empty() {
-                    format!("mysql://{}@{}:{}/{}", user, host, port, db)
+                    format!("mysql://{}@{}:{}/{}?ssl-mode={}", user, host, port, db, sslmode)
                 } else {
-                    format!("mysql://{}:{}@{}:{}/{}", user, password, host, port, db)
+                    format!(
+                        "mysql://{}:{}@{}:{}/{}?ssl-mode={}",
+                        user, password, host, port, db, sslmode
+                    )
                 }
             }
             DbEngine::SQLite => {
