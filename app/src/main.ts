@@ -17,7 +17,7 @@ import { SqlEditor } from "./components/SqlEditor";
 import { RecordPanel } from "./components/RecordPanel";
 import { showConnectionModal } from "./components/ConnectionModal";
 import { createExportButton } from "./components/ExportMenu";
-import { cloneRowValue } from "./lib/rowEdit";
+import { cloneRowValue, buildDeleteSql } from "./lib/rowEdit";
 import type { RowValue } from "./lib/ipc";
 import { saveExport, formatMeta, MAX_EXPORT_ROWS, type ExportFormat } from "./lib/export";
 import {
@@ -742,6 +742,12 @@ function renderTableTabContent(_tab: TableTab) {
   toolbar.appendChild(rowInfo);
   tableMain.appendChild(toolbar);
 
+  // Bulk-action bar — shown when one or more rows are Cmd/Ctrl+clicked
+  const selectionBar = document.createElement("div");
+  selectionBar.className = "selection-bar";
+  selectionBar.style.display = "none";
+  tableMain.appendChild(selectionBar);
+
   // Filter bar
   const filterContainer = document.createElement("div");
   filterContainer.className = "filter-bar";
@@ -791,6 +797,7 @@ function renderTableTabContent(_tab: TableTab) {
       await loadTableData();
     },
     onRowClick: (row, rowIndex) => selectRecord(row, rowIndex),
+    onSelectionChange: (indices) => updateSelectionBar(indices),
   });
 
   // Record panel
@@ -950,6 +957,89 @@ function renderTableTabContent(_tab: TableTab) {
         result.columns,
         result.rows,
         `${ac2.selectedTable}.${formatMeta[format].ext}`,
+        ac2.selectedTable,
+      );
+    } catch (e) {
+      alert(`Export failed: ${e}`);
+    }
+  }
+
+  // ── Multi-select bulk actions ──────────────────────────────────────────
+  function updateSelectionBar(indices: number[]) {
+    selectionBar.innerHTML = "";
+    if (indices.length === 0) {
+      selectionBar.style.display = "none";
+      return;
+    }
+    selectionBar.style.display = "flex";
+
+    const label = document.createElement("span");
+    label.className = "selection-bar-label";
+    label.textContent = `${indices.length} row${indices.length === 1 ? "" : "s"} selected`;
+    selectionBar.appendChild(label);
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn btn-danger";
+    delBtn.textContent = "Delete";
+    delBtn.onclick = () => void deleteSelectedRows();
+    selectionBar.appendChild(delBtn);
+
+    const selExportBtn = createExportButton({
+      formats: ["csv", "tsv", "xlsx", "json", "markdown", "html", "sql"],
+      onSelect: (format) => void exportSelectedRows(format),
+    });
+    selectionBar.appendChild(selExportBtn.element);
+
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "btn btn-secondary";
+    clearBtn.textContent = "Clear";
+    clearBtn.onclick = () => dataGrid?.clearSelection();
+    selectionBar.appendChild(clearBtn);
+  }
+
+  async function deleteSelectedRows() {
+    const ac2 = appState.activeConn.value;
+    const sel = dataGrid?.getSelectionData();
+    if (!ac2?.selectedTable || !sel || sel.rows.length === 0) return;
+    if (!confirm(`Delete ${sel.rows.length} row(s)? This cannot be undone.`)) return;
+
+    const result = buildDeleteSql({
+      engine: ac2.config.engine,
+      schema: schemaForEngine(),
+      database: ac2.selectedDatabase,
+      table: ac2.selectedTable,
+      columns: appState.tableMetadata.value,
+      rows: sel.rows,
+    });
+    if ("error" in result) {
+      alert(result.error);
+      return;
+    }
+
+    try {
+      const res = await ipc.executeQuery(ac2.connId, result.sql);
+      if (res.error) {
+        alert(`Delete failed: ${res.error}`);
+        return;
+      }
+      appState.status.set(`Deleted ${res.affected_rows ?? sel.rows.length} row(s)`);
+      dataGrid?.clearSelection();
+      await loadTableData();
+    } catch (e) {
+      alert(`Delete failed: ${e}`);
+    }
+  }
+
+  async function exportSelectedRows(format: ExportFormat) {
+    const ac2 = appState.activeConn.value;
+    const sel = dataGrid?.getSelectionData();
+    if (!ac2?.selectedTable || !sel || sel.rows.length === 0) return;
+    try {
+      await saveExport(
+        format,
+        sel.columns,
+        sel.rows,
+        `${ac2.selectedTable}_selected.${formatMeta[format].ext}`,
         ac2.selectedTable,
       );
     } catch (e) {
