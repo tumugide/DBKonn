@@ -1056,7 +1056,7 @@ dependencies = [
 
 [[package]]
 name = "dbctl"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "dbkonn-app"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "dbkonn-core",
@@ -1095,7 +1095,7 @@ dependencies = [
 
 [[package]]
 name = "dbkonn-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",

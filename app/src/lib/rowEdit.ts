@@ -126,3 +126,36 @@ export function buildUpdateSql(options: {
   const sql = `UPDATE ${qualifyTable(engine, schema, table, database)} SET ${setParts.join(", ")} WHERE ${whereParts.join(" AND ")}`;
   return { sql };
 }
+
+export function buildDeleteSql(options: {
+  engine: DbEngine;
+  schema?: string;
+  database?: string;
+  table: string;
+  columns: ColumnInfo[];
+  rows: RowValue[][];
+}): { sql: string } | { error: string } {
+  const { engine, schema, database, table, columns, rows } = options;
+
+  if (rows.length === 0) {
+    return { error: "No rows selected" };
+  }
+
+  const pkCols = columns.filter((c) => c.is_primary_key);
+  const whereCols = pkCols.length > 0 ? pkCols : columns;
+
+  const rowConditions = rows.map((row) => {
+    const parts = whereCols.map((col) => {
+      const idx = columns.findIndex((c) => c.name === col.name);
+      const val = row[idx] ?? null;
+      if (val === null) {
+        return `${quoteIdent(engine, col.name)} IS NULL`;
+      }
+      return `${quoteIdent(engine, col.name)} = ${formatSqlValue(engine, val)}`;
+    });
+    return `(${parts.join(" AND ")})`;
+  });
+
+  const sql = `DELETE FROM ${qualifyTable(engine, schema, table, database)} WHERE ${rowConditions.join(" OR ")}`;
+  return { sql };
+}

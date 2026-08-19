@@ -1,4 +1,4 @@
-import type { QueryResult, RowValue } from "../lib/ipc";
+import type { ColumnInfo, QueryResult, RowValue } from "../lib/ipc";
 
 // ── Virtual-scroll data grid ──────────────────────────────────────────────────
 // Simple windowed renderer: renders only rows in viewport + buffer.
@@ -11,6 +11,9 @@ export interface GridOptions {
   container: HTMLElement;
   onHeaderClick?: (colName: string, idx: number) => void;
   onRowClick?: (row: RowValue[], rowIndex: number) => void;
+  // Cmd/Ctrl+click toggles a row in/out of the multi-selection; fires with
+  // the full sorted set of selected row indices on every toggle.
+  onSelectionChange?: (indices: number[]) => void;
   sortCol?: string;
   sortDesc?: boolean;
   selectedRowIndex?: number;
@@ -26,6 +29,11 @@ export class DataGrid {
   private renderStart = 0;
   private renderEnd = 0;
   private _rafPending = false;
+  private multiSelect: Set<number> = new Set();
+  // Drag-to-select (mousedown on a row + move across others before mouseup)
+  private dragAnchor: number | null = null;
+  private dragMoved = false;
+  private dragBase: Set<number> = new Set();
 
   constructor(opts: GridOptions) {
     this.opts = opts;
@@ -60,6 +68,7 @@ export class DataGrid {
 
   setData(result: QueryResult) {
     this.result = result;
+    this.clearSelection();
     this.scrollEl.scrollTop = 0;
     this.renderHeaders();
     this.scheduleRender(true);
@@ -74,6 +83,92 @@ export class DataGrid {
   setSelectedRow(rowIndex?: number) {
     this.opts.selectedRowIndex = rowIndex;
     this.scheduleRender();
+  }
+
+  // ── Multi-selection (Cmd/Ctrl+click) ──────────────────────────────────────
+
+  private toggleMultiSelect(idx: number) {
+    if (this.multiSelect.has(idx)) this.multiSelect.delete(idx);
+    else this.multiSelect.add(idx);
+    this.opts.onSelectionChange?.(this.sortedSelection());
+    this.forceRerender();
+  }
+
+  private sortedSelection(): number[] {
+    return [...this.multiSelect].sort((a, b) => a - b);
+  }
+
+  clearSelection() {
+    if (this.multiSelect.size === 0) return;
+    this.multiSelect.clear();
+    this.opts.onSelectionChange?.([]);
+    this.forceRerender();
+  }
+
+  getSelectionData(): { columns: ColumnInfo[]; rows: RowValue[][] } | null {
+    if (!this.result || this.multiSelect.size === 0) return null;
+    const rows = this.sortedSelection().map((i) => this.result!.rows[i]!);
+    return { columns: this.result.columns, rows };
+  }
+
+  // Bypasses the "same range" skip in renderVisible so a selection toggle
+  // (which doesn't change the visible row range) still repaints immediately.
+  private forceRerender() {
+    this.renderStart = -1;
+    this.renderEnd = -1;
+    this.renderVisible();
+  }
+
+  // ── Drag-to-select ─────────────────────────────────────────────────────
+  // mousedown on a row arms a drag; if the pointer moves onto another row
+  // before mouseup, every row between the anchor and the current row is
+  // selected (Cmd/Ctrl held at mousedown keeps the prior selection and adds
+  // the dragged range to it, like Cmd+click). A plain click (no movement
+  // between rows) is left for the row's own "click" listener to handle.
+  private onRowMouseDown(e: MouseEvent, idx: number) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+
+    this.dragAnchor = idx;
+    this.dragMoved = false;
+    this.dragBase = e.metaKey || e.ctrlKey ? new Set(this.multiSelect) : new Set();
+
+    const onMove = (ev: MouseEvent) => this.onDragMove(ev);
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      this.dragAnchor = null;
+      // The trailing "click" on the row under the pointer (if any) consumes
+      // dragMoved synchronously, before this fires. If mouseup lands outside
+      // any row, no click ever consumes it — clear it next tick so it can't
+      // be mistaken for a drag on some later, unrelated plain click.
+      setTimeout(() => {
+        this.dragMoved = false;
+      }, 0);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  private onDragMove(e: MouseEvent) {
+    if (this.dragAnchor === null) return;
+    const rowEl = (e.target as HTMLElement | null)?.closest(
+      "tr[data-row-index]",
+    ) as HTMLElement | null;
+    if (!rowEl) return;
+
+    const idx = Number(rowEl.dataset["rowIndex"]);
+    if (Number.isNaN(idx)) return;
+    if (idx === this.dragAnchor && !this.dragMoved) return;
+
+    this.dragMoved = true;
+    const lo = Math.min(this.dragAnchor, idx);
+    const hi = Math.max(this.dragAnchor, idx);
+    const next = new Set(this.dragBase);
+    for (let i = lo; i <= hi; i++) next.add(i);
+    this.multiSelect = next;
+    this.opts.onSelectionChange?.(this.sortedSelection());
+    this.forceRerender();
   }
 
   private renderHeaders() {
@@ -149,10 +244,33 @@ export class DataGrid {
 
   private buildRow(row: RowValue[], idx: number): HTMLTableRowElement {
     const tr = document.createElement("tr");
+    tr.dataset["rowIndex"] = String(idx);
     if (idx === this.opts.selectedRowIndex) {
       tr.classList.add("selected");
     }
-    tr.addEventListener("click", () => this.opts.onRowClick?.(row, idx));
+    if (this.multiSelect.has(idx)) {
+      tr.classList.add("multi-selected");
+    }
+    tr.addEventListener("mousedown", (e) => this.onRowMouseDown(e as MouseEvent, idx));
+    tr.addEventListener("click", (e) => {
+      const evt = e as MouseEvent;
+      if (this.dragMoved) {
+        // A drag just set the selection — don't also treat the trailing
+        // click as a plain/cmd row select.
+        this.dragMoved = false;
+        return;
+      }
+      if (evt.metaKey || evt.ctrlKey) {
+        this.toggleMultiSelect(idx);
+        return;
+      }
+      if (this.multiSelect.size > 0) {
+        this.multiSelect.clear();
+        this.opts.onSelectionChange?.([]);
+        this.forceRerender();
+      }
+      this.opts.onRowClick?.(row, idx);
+    });
     row.forEach((val) => {
       const td = document.createElement("td");
       const { text, cls } = formatCell(val);
@@ -165,6 +283,7 @@ export class DataGrid {
 
   clear() {
     this.result = undefined;
+    this.multiSelect.clear();
     this.thead.innerHTML = "";
     this.tbody.innerHTML = "";
   }

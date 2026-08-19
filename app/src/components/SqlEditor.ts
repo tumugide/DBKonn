@@ -9,6 +9,8 @@ import { tags as t } from "@lezer/highlight";
 import { ipc, type ConnectionConfig, type ColumnInfo, type QueryResult, type RowValue } from "../lib/ipc";
 import { appState, type ThemeType } from "../lib/store";
 import { DataGrid } from "./DataGrid";
+import { createExportButton, type ExportButton } from "./ExportMenu";
+import { saveExport, formatMeta, type ExportFormat } from "../lib/export";
 
 type ThemeConfig = {
   theme: ReturnType<typeof EditorView.theme>;
@@ -447,6 +449,7 @@ export class SqlEditor {
   private lastRunText = "";
   private opts: SqlEditorOptions;
   private unsubTheme?: () => void;
+  private exportButton?: ExportButton;
 
   constructor(container: HTMLElement, opts: SqlEditorOptions = {}) {
     this.container = container;
@@ -499,8 +502,15 @@ export class SqlEditor {
     this.statusEl.style.cssText =
       "font-size:11px;color:var(--text-muted);flex:1;";
 
+    this.exportButton = createExportButton({
+      formats: ["csv", "tsv", "xlsx", "json", "markdown", "html", "sql"],
+      onSelect: (format) => this.exportResult(format),
+    });
+    this.exportButton.setDisabled(!this.hasExportableResult());
+
     toolbar.appendChild(runBtn);
     toolbar.appendChild(this.statusEl);
+    toolbar.appendChild(this.exportButton.element);
 
     // Error banner
     this.errorEl = document.createElement("div");
@@ -673,8 +683,30 @@ export class SqlEditor {
             : `${result.row_count} rows returned`;
         this.setStatus(`${label} in ${result.execution_time_ms}ms`);
       }
+      this.exportButton?.setDisabled(!this.hasExportableResult());
     } catch (e) {
       this.setError(String(e));
+      this.exportButton?.setDisabled(!this.hasExportableResult());
+    }
+  }
+
+  private hasExportableResult(): boolean {
+    return !!this.lastResult && !this.lastResult.error && this.lastResult.columns.length > 0;
+  }
+
+  private async exportResult(format: ExportFormat) {
+    if (!this.hasExportableResult()) return;
+    const result = this.lastResult!;
+    try {
+      await saveExport(
+        format,
+        result.columns,
+        result.rows,
+        `query_result.${formatMeta[format].ext}`,
+        "query_result",
+      );
+    } catch (e) {
+      alert(`Export failed: ${e}`);
     }
   }
 

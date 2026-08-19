@@ -16,8 +16,10 @@ import { FilterBar } from "./components/FilterBar";
 import { SqlEditor } from "./components/SqlEditor";
 import { RecordPanel } from "./components/RecordPanel";
 import { showConnectionModal } from "./components/ConnectionModal";
-import { cloneRowValue } from "./lib/rowEdit";
+import { createExportButton } from "./components/ExportMenu";
+import { cloneRowValue, buildDeleteSql } from "./lib/rowEdit";
 import type { RowValue } from "./lib/ipc";
+import { saveExport, formatMeta, MAX_EXPORT_ROWS, type ExportFormat } from "./lib/export";
 import {
   saveSession,
   loadSession,
@@ -726,19 +728,25 @@ function renderTableTabContent(_tab: TableTab) {
     void loadTableData();
   };
 
-  const exportBtn = document.createElement("button");
-  exportBtn.className = "btn btn-secondary";
-  exportBtn.textContent = "Export CSV";
-  exportBtn.onclick = () => exportCsv();
+  const exportBtn = createExportButton({
+    formats: ["csv", "tsv", "xlsx", "json", "markdown", "html", "sql"],
+    onSelect: (format) => exportData(format),
+  });
 
   const rowInfo = document.createElement("span");
   rowInfo.id = "row-info";
   rowInfo.style.cssText = "font-size:11px;color:var(--text-muted);flex:1;";
 
   toolbar.appendChild(refreshBtn);
-  toolbar.appendChild(exportBtn);
+  toolbar.appendChild(exportBtn.element);
   toolbar.appendChild(rowInfo);
   tableMain.appendChild(toolbar);
+
+  // Bulk-action bar — shown when one or more rows are Cmd/Ctrl+clicked
+  const selectionBar = document.createElement("div");
+  selectionBar.className = "selection-bar";
+  selectionBar.style.display = "none";
+  tableMain.appendChild(selectionBar);
 
   // Filter bar
   const filterContainer = document.createElement("div");
@@ -789,6 +797,7 @@ function renderTableTabContent(_tab: TableTab) {
       await loadTableData();
     },
     onRowClick: (row, rowIndex) => selectRecord(row, rowIndex),
+    onSelectionChange: (indices) => updateSelectionBar(indices),
   });
 
   // Record panel
@@ -921,8 +930,8 @@ function renderTableTabContent(_tab: TableTab) {
     }
   }
 
-  // ── CSV export ──────────────────────────────────────────────────────────
-  async function exportCsv() {
+  // ── Export ──────────────────────────────────────────────────────────────
+  async function exportData(format: ExportFormat) {
     const s = appState.tableState.value;
     const ac2 = appState.activeConn.value;
     if (!ac2?.selectedTable) return;
@@ -932,26 +941,107 @@ function renderTableTabContent(_tab: TableTab) {
         ac2.selectedSchema,
         ac2.selectedTable,
         {
-          limit: 10_000,
+          limit: MAX_EXPORT_ROWS,
           offset: 0,
           order_by: s.orderBy,
           order_desc: s.orderDesc,
         },
         s.whereClause || undefined,
       );
-      const lines = [
-        result.columns.map((c) => csvCell(c.name)).join(","),
-        ...result.rows.map((row) =>
-          row.map((v) => csvCell(String(v ?? ""))).join(","),
-        ),
-      ];
-      const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${ac2.selectedTable}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      if (result.error) {
+        alert(`Export failed: ${result.error}`);
+        return;
+      }
+      await saveExport(
+        format,
+        result.columns,
+        result.rows,
+        `${ac2.selectedTable}.${formatMeta[format].ext}`,
+        ac2.selectedTable,
+      );
+    } catch (e) {
+      alert(`Export failed: ${e}`);
+    }
+  }
+
+  // ── Multi-select bulk actions ──────────────────────────────────────────
+  function updateSelectionBar(indices: number[]) {
+    selectionBar.innerHTML = "";
+    if (indices.length === 0) {
+      selectionBar.style.display = "none";
+      return;
+    }
+    selectionBar.style.display = "flex";
+
+    const label = document.createElement("span");
+    label.className = "selection-bar-label";
+    label.textContent = `${indices.length} row${indices.length === 1 ? "" : "s"} selected`;
+    selectionBar.appendChild(label);
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn btn-danger";
+    delBtn.textContent = "Delete";
+    delBtn.onclick = () => void deleteSelectedRows();
+    selectionBar.appendChild(delBtn);
+
+    const selExportBtn = createExportButton({
+      formats: ["csv", "tsv", "xlsx", "json", "markdown", "html", "sql"],
+      onSelect: (format) => void exportSelectedRows(format),
+    });
+    selectionBar.appendChild(selExportBtn.element);
+
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "btn btn-secondary";
+    clearBtn.textContent = "Clear";
+    clearBtn.onclick = () => dataGrid?.clearSelection();
+    selectionBar.appendChild(clearBtn);
+  }
+
+  async function deleteSelectedRows() {
+    const ac2 = appState.activeConn.value;
+    const sel = dataGrid?.getSelectionData();
+    if (!ac2?.selectedTable || !sel || sel.rows.length === 0) return;
+    if (!confirm(`Delete ${sel.rows.length} row(s)? This cannot be undone.`)) return;
+
+    const result = buildDeleteSql({
+      engine: ac2.config.engine,
+      schema: schemaForEngine(),
+      database: ac2.selectedDatabase,
+      table: ac2.selectedTable,
+      columns: appState.tableMetadata.value,
+      rows: sel.rows,
+    });
+    if ("error" in result) {
+      alert(result.error);
+      return;
+    }
+
+    try {
+      const res = await ipc.executeQuery(ac2.connId, result.sql);
+      if (res.error) {
+        alert(`Delete failed: ${res.error}`);
+        return;
+      }
+      appState.status.set(`Deleted ${res.affected_rows ?? sel.rows.length} row(s)`);
+      dataGrid?.clearSelection();
+      await loadTableData();
+    } catch (e) {
+      alert(`Delete failed: ${e}`);
+    }
+  }
+
+  async function exportSelectedRows(format: ExportFormat) {
+    const ac2 = appState.activeConn.value;
+    const sel = dataGrid?.getSelectionData();
+    if (!ac2?.selectedTable || !sel || sel.rows.length === 0) return;
+    try {
+      await saveExport(
+        format,
+        sel.columns,
+        sel.rows,
+        `${ac2.selectedTable}_selected.${formatMeta[format].ext}`,
+        ac2.selectedTable,
+      );
     } catch (e) {
       alert(`Export failed: ${e}`);
     }
@@ -1714,13 +1804,6 @@ function esc(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-}
-
-function csvCell(val: string): string {
-  if (val.includes(",") || val.includes('"') || val.includes("\n")) {
-    return `"${val.replace(/"/g, '""')}"`;
-  }
-  return val;
 }
 
 // Best-effort detection of "this query is really just browsing one table",
