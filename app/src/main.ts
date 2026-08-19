@@ -16,8 +16,10 @@ import { FilterBar } from "./components/FilterBar";
 import { SqlEditor } from "./components/SqlEditor";
 import { RecordPanel } from "./components/RecordPanel";
 import { showConnectionModal } from "./components/ConnectionModal";
+import { createExportButton } from "./components/ExportMenu";
 import { cloneRowValue } from "./lib/rowEdit";
 import type { RowValue } from "./lib/ipc";
+import { saveExport, formatMeta, MAX_EXPORT_ROWS, type ExportFormat } from "./lib/export";
 import {
   saveSession,
   loadSession,
@@ -726,17 +728,17 @@ function renderTableTabContent(_tab: TableTab) {
     void loadTableData();
   };
 
-  const exportBtn = document.createElement("button");
-  exportBtn.className = "btn btn-secondary";
-  exportBtn.textContent = "Export CSV";
-  exportBtn.onclick = () => exportCsv();
+  const exportBtn = createExportButton({
+    formats: ["csv", "tsv", "xlsx", "json", "markdown", "html", "sql"],
+    onSelect: (format) => exportData(format),
+  });
 
   const rowInfo = document.createElement("span");
   rowInfo.id = "row-info";
   rowInfo.style.cssText = "font-size:11px;color:var(--text-muted);flex:1;";
 
   toolbar.appendChild(refreshBtn);
-  toolbar.appendChild(exportBtn);
+  toolbar.appendChild(exportBtn.element);
   toolbar.appendChild(rowInfo);
   tableMain.appendChild(toolbar);
 
@@ -921,8 +923,8 @@ function renderTableTabContent(_tab: TableTab) {
     }
   }
 
-  // ── CSV export ──────────────────────────────────────────────────────────
-  async function exportCsv() {
+  // ── Export ──────────────────────────────────────────────────────────────
+  async function exportData(format: ExportFormat) {
     const s = appState.tableState.value;
     const ac2 = appState.activeConn.value;
     if (!ac2?.selectedTable) return;
@@ -932,26 +934,24 @@ function renderTableTabContent(_tab: TableTab) {
         ac2.selectedSchema,
         ac2.selectedTable,
         {
-          limit: 10_000,
+          limit: MAX_EXPORT_ROWS,
           offset: 0,
           order_by: s.orderBy,
           order_desc: s.orderDesc,
         },
         s.whereClause || undefined,
       );
-      const lines = [
-        result.columns.map((c) => csvCell(c.name)).join(","),
-        ...result.rows.map((row) =>
-          row.map((v) => csvCell(String(v ?? ""))).join(","),
-        ),
-      ];
-      const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${ac2.selectedTable}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      if (result.error) {
+        alert(`Export failed: ${result.error}`);
+        return;
+      }
+      await saveExport(
+        format,
+        result.columns,
+        result.rows,
+        `${ac2.selectedTable}.${formatMeta[format].ext}`,
+        ac2.selectedTable,
+      );
     } catch (e) {
       alert(`Export failed: ${e}`);
     }
@@ -1714,13 +1714,6 @@ function esc(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-}
-
-function csvCell(val: string): string {
-  if (val.includes(",") || val.includes('"') || val.includes("\n")) {
-    return `"${val.replace(/"/g, '""')}"`;
-  }
-  return val;
 }
 
 // Best-effort detection of "this query is really just browsing one table",

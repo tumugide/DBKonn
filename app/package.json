@@ -20,7 +20,8 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-fs": "^2",
-    "@tauri-apps/plugin-shell": "^2"
+    "@tauri-apps/plugin-shell": "^2",
+    "write-excel-file": "^4.1.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
