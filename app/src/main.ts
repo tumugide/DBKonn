@@ -17,6 +17,7 @@ import { SqlEditor } from "./components/SqlEditor";
 import { RecordPanel } from "./components/RecordPanel";
 import { showConnectionModal } from "./components/ConnectionModal";
 import { createExportButton } from "./components/ExportMenu";
+import { showContextMenu } from "./components/ContextMenu";
 import { cloneRowValue, buildDeleteSql } from "./lib/rowEdit";
 import type { RowValue } from "./lib/ipc";
 import { saveExport, formatMeta, MAX_EXPORT_ROWS, type ExportFormat } from "./lib/export";
@@ -343,6 +344,23 @@ function renderConnRail() {
     btn.title = s.config.name;
     btn.textContent = initialsFor(s.config.name);
     btn.onclick = () => switchToConnSession(s.id);
+    btn.oncontextmenu = (e) => {
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, [
+        { label: "Disconnect", onSelect: () => disconnectSession(s.id) },
+        {
+          label: "Disconnect Others",
+          onSelect: () => disconnectOtherSessions(s.id),
+          disabled: sessions.length <= 1,
+        },
+        {
+          label: "Disconnect All",
+          onSelect: () => disconnectAllSessions(),
+          separatorBefore: true,
+          danger: true,
+        },
+      ]);
+    };
 
     const closeBtn = document.createElement("span");
     closeBtn.className = "conn-avatar-close";
@@ -478,6 +496,22 @@ async function disconnectSession(id: string) {
   }
 
   persistSessionNow();
+}
+
+// Disconnects every open session except `id`, one at a time so each keeps
+// its own unsaved-changes confirmation and IPC teardown.
+async function disconnectOtherSessions(id: string) {
+  const others = appState.connSessions.value.filter((s) => s.id !== id);
+  for (const s of others) {
+    await disconnectSession(s.id);
+  }
+}
+
+async function disconnectAllSessions() {
+  const all = [...appState.connSessions.value];
+  for (const s of all) {
+    await disconnectSession(s.id);
+  }
 }
 
 function resetTabsAndLiveState() {
@@ -1557,18 +1591,6 @@ function renderTabStrip() {
     newTabBtn.title = "New query (⌘T)";
     newTabBtn.onclick = () => openQueryTab();
     tabStripEl.appendChild(newTabBtn);
-
-    if (tabs.length > 0) {
-      const closeAllBtn = document.createElement("button");
-      closeAllBtn.className = "table-tab-closeall";
-      closeAllBtn.innerHTML = "&#10005;&#10005;";
-      closeAllBtn.title = "Close all tabs";
-      closeAllBtn.onclick = () => {
-        if (!confirm(`Close all ${tabs.length} open tabs?`)) return;
-        closeAllTabs();
-      };
-      tabStripEl.appendChild(closeAllBtn);
-    }
   };
 
   if (tabs.length === 0) {
@@ -1586,6 +1608,34 @@ function renderTabStrip() {
         ? `${tab.schema ? tab.schema + "." : ""}${tab.name}`
         : tab.title;
     item.onclick = () => switchToTab(tab.id);
+    item.oncontextmenu = (e) => {
+      e.preventDefault();
+      const tabIndex = tabs.indexOf(tab);
+      showContextMenu(e.clientX, e.clientY, [
+        { label: "Close", onSelect: () => closeTab(tab.id) },
+        {
+          label: "Close Others",
+          onSelect: () => closeOtherTabs(tab.id),
+          disabled: tabs.length <= 1,
+        },
+        {
+          label: "Close Tabs to the Right",
+          onSelect: () => closeTabsToRight(tab.id),
+          disabled: tabIndex >= tabs.length - 1,
+        },
+        {
+          label: "Close Tabs to the Left",
+          onSelect: () => closeTabsToLeft(tab.id),
+          disabled: tabIndex <= 0,
+        },
+        {
+          label: "Close All Tabs",
+          onSelect: () => closeAllTabs(),
+          separatorBefore: true,
+          danger: true,
+        },
+      ]);
+    };
 
     const icon = document.createElement("span");
     icon.className = "table-tab-icon";
@@ -1716,12 +1766,100 @@ function closeTab(tabId: string) {
 }
 
 function closeAllTabs() {
+  const tabs = appState.openTabs.value;
+  if (tabs.length === 0) return;
+  if (!confirm(`Close all ${tabs.length} open tabs?`)) return;
+
   resetTabsAndLiveState();
   const ac = appState.activeConn.value;
   if (ac) appState.activeConn.set({ ...ac, selectedTable: undefined });
   renderActiveTabContent();
   renderTabStrip();
   persistSessionNow();
+}
+
+// True if the given tab has an in-progress, unsaved record edit. For the
+// active tab that state lives in the live `selectedRecord` signal; for
+// background tabs it's frozen in the tab's own snapshot.
+function tabHasUnsavedChanges(tab: AppTab): boolean {
+  if (tab.kind !== "table") return false;
+  const rec =
+    tab.id === appState.activeTab.value ? appState.selectedRecord.value : tab.selectedRecord;
+  return !!rec?.dirty;
+}
+
+// Shared implementation for the multi-tab "Close Others / Left / Right"
+// context-menu actions. Unlike closeAllTabs, this only confirms when a tab
+// being closed actually has unsaved edits — closing several clean tabs at
+// once shouldn't need a "are you sure?" nag.
+function closeTabsBulk(idsToClose: Set<string>) {
+  if (idsToClose.size === 0) return;
+  const tabs = appState.openTabs.value;
+
+  const dirtyCount = tabs.filter((t) => idsToClose.has(t.id) && tabHasUnsavedChanges(t)).length;
+  if (dirtyCount > 0) {
+    const msg =
+      dirtyCount === 1
+        ? "Discard unsaved changes in 1 tab and close it?"
+        : `Discard unsaved changes in ${dirtyCount} tabs and close them?`;
+    if (!confirm(msg)) return;
+  }
+
+  const remaining = tabs.filter((t) => !idsToClose.has(t.id));
+  const activeId = appState.activeTab.value;
+  const activeWasClosed = activeId !== null && idsToClose.has(activeId);
+
+  appState.openTabs.set(remaining);
+
+  if (activeWasClosed) {
+    if (remaining.length > 0) {
+      const nextTab = remaining[0]!;
+      appState.activeTab.set(nextTab.id);
+      const ac = appState.activeConn.value;
+      if (nextTab.kind === "table" && ac) {
+        appState.activeConn.set({
+          ...ac,
+          selectedTable: nextTab.name,
+          selectedSchema: nextTab.schema ?? ac.selectedSchema,
+          selectedDatabase: nextTab.database ?? ac.selectedDatabase,
+        });
+        loadTableTabIntoSignals(nextTab);
+      }
+    } else {
+      appState.activeTab.set(null);
+      appState.tableState.set(freshTableState());
+      appState.tableMetadata.set([]);
+      appState.selectedRecord.set(null);
+      appState.filterRules.set([]);
+      const ac = appState.activeConn.value;
+      if (ac) appState.activeConn.set({ ...ac, selectedTable: undefined });
+    }
+    renderActiveTabContent();
+  }
+
+  renderTabStrip();
+  persistSessionNow();
+}
+
+function closeOtherTabs(tabId: string) {
+  const ids = new Set(appState.openTabs.value.filter((t) => t.id !== tabId).map((t) => t.id));
+  closeTabsBulk(ids);
+}
+
+function closeTabsToRight(tabId: string) {
+  const tabs = appState.openTabs.value;
+  const idx = tabs.findIndex((t) => t.id === tabId);
+  if (idx === -1) return;
+  const ids = new Set(tabs.slice(idx + 1).map((t) => t.id));
+  closeTabsBulk(ids);
+}
+
+function closeTabsToLeft(tabId: string) {
+  const tabs = appState.openTabs.value;
+  const idx = tabs.findIndex((t) => t.id === tabId);
+  if (idx === -1) return;
+  const ids = new Set(tabs.slice(0, idx).map((t) => t.id));
+  closeTabsBulk(ids);
 }
 
 // Always create a brand new table tab (allows duplicates — e.g. two views of
