@@ -54,6 +54,22 @@ export const THEMES: Record<ThemeType, ThemeMeta> = {
   "ayu-light":{ label: "Ayu Light",   icon: "○" },
 };
 
+// ── Connection colors ────────────────────────────────────────────────────────
+// A small curated palette users can tag connections with, so e.g. production
+// vs. staging vs. local are distinguishable at a glance in the rail/sidebar
+// without having to read the name every time.
+
+export const CONNECTION_COLORS: string[] = [
+  "#e06c75", // red
+  "#e5943f", // orange
+  "#e5c07b", // yellow
+  "#98c379", // green
+  "#56b6c2", // teal
+  "#61afef", // blue
+  "#c678dd", // purple
+  "#abb2bf", // gray
+];
+
 // ── App State ─────────────────────────────────────────────────────────────────
 
 export interface TableState {

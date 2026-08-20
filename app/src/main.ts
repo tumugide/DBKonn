@@ -188,7 +188,7 @@ function renderSidebar() {
   if (ac) {
     // ── Connected mode ─────────────────────────────────────────────────────
     buf.push(`
-      <div class="sidebar-header connected">
+      <div class="sidebar-header connected" style="--conn-color:${ac.config.color ?? avatarColor(ac.config.id)}">
         <span>${esc(ac.config.name)}</span>
         <button class="btn-icon danger" id="sb-disconnect" title="Disconnect">Quit</button>
       </div>
@@ -302,6 +302,7 @@ function renderConnList() {
     const item = document.createElement("div");
     item.className = "conn-item" + (ac?.config.id === cfg.id ? " active" : "");
     item.innerHTML = `
+      <span class="conn-color-dot" style="background:${cfg.color ?? avatarColor(cfg.id)}"></span>
       <span class="conn-engine">${cfg.engine.slice(0, 2).toUpperCase()}</span>
       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(cfg.name)}</span>`;
     item.addEventListener("click", () => connectToDb(cfg));
@@ -318,8 +319,9 @@ function initialsFor(name: string): string {
   return (words[0]![0]! + words[1]![0]!).toUpperCase();
 }
 
-// Deterministic color per saved connection (not per session) so the same
-// connection always gets the same avatar color, independent of theme.
+// Fallback color for connections without a user-assigned color (see
+// ConnectionModal's color picker). Deterministic per saved connection id
+// (not per session) so the same connection always gets the same color.
 function avatarColor(seed: string): string {
   let hash = 0;
   for (let i = 0; i < seed.length; i++) {
@@ -340,7 +342,7 @@ function renderConnRail() {
   sessions.forEach((s) => {
     const btn = document.createElement("button");
     btn.className = `conn-avatar${s.id === activeId ? " active" : ""}`;
-    btn.style.background = avatarColor(s.config.id);
+    btn.style.background = s.config.color ?? avatarColor(s.config.id);
     btn.title = s.config.name;
     btn.textContent = initialsFor(s.config.name);
     btn.onclick = () => switchToConnSession(s.id);

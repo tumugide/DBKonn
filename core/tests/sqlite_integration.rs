@@ -20,6 +20,7 @@ fn sqlite_config() -> ConnectionConfig {
         database: None,
         file_path: Some(":memory:".to_string()),
         ssl_mode: SslMode::Disable,
+        color: None,
     }
 }
 
