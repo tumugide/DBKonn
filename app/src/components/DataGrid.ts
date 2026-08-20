@@ -11,8 +11,9 @@ export interface GridOptions {
   container: HTMLElement;
   onHeaderClick?: (colName: string, idx: number) => void;
   onRowClick?: (row: RowValue[], rowIndex: number) => void;
-  // Cmd/Ctrl+click toggles a row in/out of the multi-selection; fires with
-  // the full sorted set of selected row indices on every toggle.
+  // Fires with the full sorted set of selected row indices whenever the
+  // selection changes — a plain click (exclusive single-row select),
+  // Cmd/Ctrl+click (toggle), or a drag (range select).
   onSelectionChange?: (indices: number[]) => void;
   sortCol?: string;
   sortDesc?: boolean;
@@ -68,7 +69,11 @@ export class DataGrid {
 
   setData(result: QueryResult) {
     this.result = result;
-    this.clearSelection();
+    // Silent: row indices from the previous page/sort/filter no longer mean
+    // anything once new rows land, but we don't want to also fire
+    // onSelectionChange here — a caller that wants to keep a record open
+    // across the reload restores it explicitly afterward via setSelectedRow.
+    this.multiSelect.clear();
     this.scrollEl.scrollTop = 0;
     this.renderHeaders();
     this.scheduleRender(true);
@@ -82,7 +87,7 @@ export class DataGrid {
 
   setSelectedRow(rowIndex?: number) {
     this.opts.selectedRowIndex = rowIndex;
-    this.scheduleRender();
+    this.forceRerender();
   }
 
   // ── Multi-selection (Cmd/Ctrl+click) ──────────────────────────────────────
@@ -264,11 +269,13 @@ export class DataGrid {
         this.toggleMultiSelect(idx);
         return;
       }
-      if (this.multiSelect.size > 0) {
-        this.multiSelect.clear();
-        this.opts.onSelectionChange?.([]);
-        this.forceRerender();
-      }
+      // Plain click: select this row exclusively. This is the same
+      // selection the Delete/Export bulk-action bar operates on, so a
+      // single click is enough to make a record deletable — not just
+      // openable in the editor panel.
+      this.multiSelect = new Set([idx]);
+      this.opts.onSelectionChange?.(this.sortedSelection());
+      this.forceRerender();
       this.opts.onRowClick?.(row, idx);
     });
     row.forEach((val) => {
