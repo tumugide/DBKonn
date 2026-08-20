@@ -122,6 +122,7 @@ pub fn run() {
             commands::disconnect_db,
             commands::test_connection,
             commands::list_databases,
+            commands::create_database,
             commands::list_schemas,
             commands::list_tables,
             commands::describe_table,

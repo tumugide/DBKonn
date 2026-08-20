@@ -16,6 +16,7 @@ import { FilterBar } from "./components/FilterBar";
 import { SqlEditor } from "./components/SqlEditor";
 import { RecordPanel } from "./components/RecordPanel";
 import { showConnectionModal } from "./components/ConnectionModal";
+import { showCreateDatabaseModal } from "./components/CreateDatabaseModal";
 import { createExportButton } from "./components/ExportMenu";
 import { showContextMenu } from "./components/ContextMenu";
 import { cloneRowValue, buildDeleteSql } from "./lib/rowEdit";
@@ -207,6 +208,7 @@ function renderSidebar() {
         <div class="db-control-row">
           <label>DB</label>
           <select id="sb-db-select">${dbs}</select>
+          <button class="btn-icon" id="sb-new-db" title="Create database">+</button>
         </div>
       `);
     }
@@ -230,15 +232,13 @@ function renderSidebar() {
     buf.push(`</div>`);
 
     // Table tree
-    buf.push(`<div class="tree-header">Tables <span class="tree-count">${ac.tables.length}</span></div>`);
-    buf.push(`<div style="flex:1;overflow-y:auto;">`);
-    ac.tables.forEach((t) => {
-      const active = t.name === ac.selectedTable ? " active" : "";
-      buf.push(
-        `<div class="tree-item${active}" data-table="${esc(t.name)}">${esc(t.name)}</div>`,
-      );
-    });
-    buf.push(`</div>`);
+    buf.push(`
+      <div class="tree-header">
+        <span>Tables <span class="tree-count" id="sb-tree-count">${ac.tables.length}</span></span>
+        <button class="btn-icon" id="sb-refresh-tree" title="Refresh schema">⟳</button>
+      </div>
+      <div style="flex:1;overflow-y:auto;" id="sb-table-tree"></div>
+    `);
   } else {
     // ── Disconnected mode ──────────────────────────────────────────────────
     buf.push(`
@@ -263,6 +263,13 @@ function renderSidebar() {
       switchDatabase(db);
     });
 
+    document.getElementById("sb-new-db")?.addEventListener("click", () => {
+      showCreateDatabaseModal(ac.connId, (newName) => {
+        appState.activeConn.set({ ...ac, databases: [...ac.databases, newName] });
+        switchDatabase(newName);
+      });
+    });
+
     document
       .getElementById("sb-schema-select")
       ?.addEventListener("change", (e) => {
@@ -270,18 +277,53 @@ function renderSidebar() {
         switchSchema(schema);
       });
 
-    sidebarEl.querySelectorAll(".tree-item").forEach((el) => {
-      el.addEventListener("click", () => {
-        const tableName = (el as HTMLElement).dataset["table"]!;
-        openOrCreateTableTab(tableName, ac.selectedSchema);
-      });
-    });
+    renderTableTree(ac);
+
+    document
+      .getElementById("sb-refresh-tree")
+      ?.addEventListener("click", () => void refreshSchemaTree());
   } else {
     document.getElementById("sb-new-conn")?.addEventListener("click", () => {
       showConnectionModal(undefined, () => renderSidebar());
     });
     renderConnList();
   }
+}
+
+// Re-syncs which sidebar tree-item shows as "active" for any code path that
+// changes selectedTable outside of a full renderSidebar() rebuild, without
+// touching the DB/schema dropdowns or rebinding listeners.
+function updateTreeActiveState() {
+  const ac = appState.activeConn.value;
+  sidebarEl.querySelectorAll<HTMLElement>(".tree-item").forEach((el) => {
+    el.classList.toggle("active", el.dataset["table"] === ac?.selectedTable);
+  });
+}
+
+// Rebuilds just the table-list container and its click listeners, without
+// touching the DB/schema dropdowns — used by both the initial renderSidebar()
+// build and refreshSchemaTree(), so there's one source of truth for the
+// tree-item markup/binding.
+function renderTableTree(ac: ConnSession) {
+  const countEl = document.getElementById("sb-tree-count");
+  if (countEl) countEl.textContent = String(ac.tables.length);
+
+  const treeEl = document.getElementById("sb-table-tree");
+  if (!treeEl) return;
+
+  treeEl.innerHTML = ac.tables
+    .map((t) => {
+      const active = t.name === ac.selectedTable ? " active" : "";
+      return `<div class="tree-item${active}" data-table="${esc(t.name)}">${esc(t.name)}</div>`;
+    })
+    .join("");
+
+  treeEl.querySelectorAll(".tree-item").forEach((el) => {
+    el.addEventListener("click", () => {
+      const tableName = (el as HTMLElement).dataset["table"]!;
+      openOrCreateTableTab(tableName, ac.selectedSchema);
+    });
+  });
 }
 
 function renderConnList() {
@@ -459,6 +501,85 @@ async function switchSchema(schemaName: string) {
   }
 }
 
+// ── Schema refresh (manual + background) ────────────────────────────────────
+// Re-fetches databases/schemas/tables for the focused connection in place,
+// without disrupting open tabs or in-progress edits — mirrors the re-fetch
+// pattern switchSchema() already uses, just without the reconnect.
+
+let schemaRefreshInFlight = false;
+
+async function refreshSchemaTree(opts?: { silent?: boolean }) {
+  const ac = appState.activeConn.value;
+  if (!ac) return;
+  if (schemaRefreshInFlight) return;
+  if (document.querySelector(".modal-overlay")) return;
+
+  schemaRefreshInFlight = true;
+  const refreshBtn = document.getElementById("sb-refresh-tree");
+  if (!opts?.silent) refreshBtn?.classList.add("spinning");
+
+  try {
+    const [databases, schemas, tables] = await Promise.all([
+      ipc.listDatabases(ac.connId).catch(() => ac.databases),
+      ipc.listSchemas(ac.connId).catch(() => ac.schemas),
+      ipc.listTables(ac.connId, ac.selectedSchema).catch(() => ac.tables),
+    ]);
+
+    const selectedSchema = schemas.some((s) => s.name === ac.selectedSchema)
+      ? ac.selectedSchema
+      : (schemas.find((s) => s.name === "public" || s.name === "dbo")?.name ?? schemas[0]?.name);
+    const selectedTable = tables.some((t) => t.name === ac.selectedTable) ? ac.selectedTable : undefined;
+
+    const updated = { ...ac, databases, schemas, selectedSchema, tables, selectedTable };
+    appState.activeConn.set(updated);
+
+    renderTableTree(updated);
+
+    const dbSelect = document.getElementById("sb-db-select") as HTMLSelectElement | null;
+    if (dbSelect && document.activeElement !== dbSelect) {
+      dbSelect.innerHTML = databases
+        .map((db) => `<option value="${esc(db)}"${db === updated.selectedDatabase ? " selected" : ""}>${esc(db)}</option>`)
+        .join("");
+    }
+    const schemaSelect = document.getElementById("sb-schema-select") as HTMLSelectElement | null;
+    if (schemaSelect && document.activeElement !== schemaSelect) {
+      schemaSelect.innerHTML = schemas
+        .map((s) => `<option value="${esc(s.name)}"${s.name === selectedSchema ? " selected" : ""}>${esc(s.name)}</option>`)
+        .join("");
+    }
+
+    if (!opts?.silent) appState.status.set("Schema refreshed");
+  } catch (e) {
+    if (!opts?.silent) appState.status.set(`Error: ${e}`);
+    else console.warn("Auto-refresh failed:", e);
+  } finally {
+    schemaRefreshInFlight = false;
+    refreshBtn?.classList.remove("spinning");
+  }
+}
+
+const AUTO_REFRESH_INTERVAL_MS = 30_000;
+let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+function stopAutoRefresh() {
+  if (autoRefreshTimer !== null) clearInterval(autoRefreshTimer);
+  autoRefreshTimer = null;
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  if (document.hidden || !appState.activeConn.value) return;
+  autoRefreshTimer = setInterval(() => {
+    if (!document.hidden) void refreshSchemaTree({ silent: true });
+  }, AUTO_REFRESH_INTERVAL_MS);
+}
+
+document.addEventListener("visibilitychange", () => {
+  document.hidden ? stopAutoRefresh() : startAutoRefresh();
+});
+window.addEventListener("focus", startAutoRefresh);
+window.addEventListener("blur", stopAutoRefresh);
+
 // Disconnects a single connection session — the focused one (from the
 // sidebar "Quit" button) or a background one (from the rail's hover-×) —
 // leaving every other open connection untouched.
@@ -490,6 +611,7 @@ async function disconnectSession(id: string) {
       resetTabsAndLiveState();
       statusDot.className = "status-dot";
       appState.status.set("Disconnected");
+      stopAutoRefresh();
       renderSidebar();
       renderContentArea();
     }
@@ -1320,6 +1442,8 @@ function focusSession(session: ConnSession) {
   appState.openTabs.set([...session.openTabs]);
   appState.activeTab.set(session.activeTabId);
   renderSidebar();
+  startAutoRefresh();
+  void refreshSchemaTree({ silent: true });
 }
 
 // Renders the just-focused session's tab strip + content: hydrates the
@@ -1581,6 +1705,8 @@ function loadTableTabIntoSignals(tab: TableTab) {
 }
 
 function renderTabStrip() {
+  updateTreeActiveState();
+
   const tabs = appState.openTabs.value;
   const activeTabId = appState.activeTab.value;
 

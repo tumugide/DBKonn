@@ -81,6 +81,7 @@ export const ipc = {
   getActiveConnections:()                                                       => invoke<string[]>("get_active_connections"),
 
   listDatabases:       (connId: string)                                         => invoke<string[]>("list_databases", { connId }),
+  createDatabase:      (connId: string, name: string)                           => invoke<void>("create_database", { connId, name }),
   listSchemas:         (connId: string)                                         => invoke<SchemaInfo[]>("list_schemas", { connId }),
   listTables:          (connId: string, schema?: string)                        => invoke<TableInfo[]>("list_tables", { connId, schema }),
   describeTable:       (connId: string, schema: string|undefined, table: string) => invoke<[ColumnInfo[], IndexInfo[]]>("describe_table", { connId, schema, table }),
