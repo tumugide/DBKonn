@@ -506,15 +506,19 @@ async function switchSchema(schemaName: string) {
 // without disrupting open tabs or in-progress edits — mirrors the re-fetch
 // pattern switchSchema() already uses, just without the reconnect.
 
-let schemaRefreshInFlight = false;
+// Keyed by session id, not a single flag — refreshes for different open
+// connections must not block each other (see staleness check below for why
+// that matters).
+const schemaRefreshInFlight = new Set<string>();
 
 async function refreshSchemaTree(opts?: { silent?: boolean }) {
   const ac = appState.activeConn.value;
   if (!ac) return;
-  if (schemaRefreshInFlight) return;
+  const sessionId = ac.id;
+  if (schemaRefreshInFlight.has(sessionId)) return;
   if (document.querySelector(".modal-overlay")) return;
 
-  schemaRefreshInFlight = true;
+  schemaRefreshInFlight.add(sessionId);
   const refreshBtn = document.getElementById("sb-refresh-tree");
   if (!opts?.silent) refreshBtn?.classList.add("spinning");
 
@@ -531,6 +535,21 @@ async function refreshSchemaTree(opts?: { silent?: boolean }) {
     const selectedTable = tables.some((t) => t.name === ac.selectedTable) ? ac.selectedTable : undefined;
 
     const updated = { ...ac, databases, schemas, selectedSchema, tables, selectedTable };
+
+    // Keep the fetched data cached on the session even if the user has
+    // since switched away, so it's fresh whenever they switch back to it.
+    appState.connSessions.set(
+      appState.connSessions.value.map((s) => (s.id === sessionId ? updated : s)),
+    );
+
+    // But if focus has moved to a different connection while this fetch was
+    // in flight, do NOT touch the live UI/activeConn — this fetch is for a
+    // connection that's no longer on screen, and applying it here would
+    // silently replace whatever connection the user is now looking at with
+    // this one's tables (this was the root cause of tables from one
+    // connection "flashing over" another after a few seconds).
+    if (appState.activeConn.value?.id !== sessionId) return;
+
     appState.activeConn.set(updated);
 
     renderTableTree(updated);
@@ -553,7 +572,7 @@ async function refreshSchemaTree(opts?: { silent?: boolean }) {
     if (!opts?.silent) appState.status.set(`Error: ${e}`);
     else console.warn("Auto-refresh failed:", e);
   } finally {
-    schemaRefreshInFlight = false;
+    schemaRefreshInFlight.delete(sessionId);
     refreshBtn?.classList.remove("spinning");
   }
 }
