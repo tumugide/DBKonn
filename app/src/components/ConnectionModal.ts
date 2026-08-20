@@ -1,5 +1,5 @@
 import { ipc, type ConnectionConfig, type DbEngine } from "../lib/ipc";
-import { appState } from "../lib/store";
+import { appState, CONNECTION_COLORS } from "../lib/store";
 
 function genId(): string {
   return crypto.randomUUID
@@ -36,6 +36,17 @@ export function showConnectionModal(
           <label>Connection Name</label>
           <input id="cm-name" type="text" value="${esc(initial.name)}"
                  placeholder="my-database" style="width:100%" />
+        </div>
+
+        <div class="form-row">
+          <label>Color</label>
+          <div class="color-picker" id="cm-color-picker">
+            <button type="button" class="color-swatch color-swatch-none${!initial.color ? " selected" : ""}" data-color="" title="No color"></button>
+            ${CONNECTION_COLORS.map(
+              (c) =>
+                `<button type="button" class="color-swatch${initial.color === c ? " selected" : ""}" data-color="${c}" style="background:${c}" title="${c}"></button>`,
+            ).join("")}
+          </div>
         </div>
 
         <div class="form-row">
@@ -118,6 +129,17 @@ export function showConnectionModal(
   const sqliteFields = overlay.querySelector<HTMLElement>("#cm-sqlite-fields")!;
   const portInput = overlay.querySelector<HTMLInputElement>("#cm-port")!;
   const statusEl = overlay.querySelector<HTMLElement>("#cm-status")!;
+  const colorPicker = overlay.querySelector<HTMLElement>("#cm-color-picker")!;
+
+  let selectedColor: string | undefined = initial.color;
+  colorPicker.querySelectorAll<HTMLButtonElement>(".color-swatch").forEach((sw) => {
+    sw.addEventListener("click", () => {
+      selectedColor = sw.dataset["color"] || undefined;
+      colorPicker
+        .querySelectorAll(".color-swatch")
+        .forEach((s) => s.classList.toggle("selected", s === sw));
+    });
+  });
 
   const DEFAULT_PORTS: Record<DbEngine, number> = {
     postgres: 5432,
@@ -192,6 +214,7 @@ export function showConnectionModal(
       ssl_mode: isSqlite
         ? "disable"
         : (overlay.querySelector<HTMLSelectElement>("#cm-ssl")!.value as any),
+      color: selectedColor,
     };
   }
 

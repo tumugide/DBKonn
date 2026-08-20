@@ -16,6 +16,8 @@ export interface ConnectionConfig {
   database?: string;
   file_path?: string;
   ssl_mode: SslMode;
+  /** User-assigned color tag (hex, e.g. "#e06c75") for telling connections apart at a glance */
+  color?: string;
 }
 
 export interface ColumnInfo {

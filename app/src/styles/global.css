@@ -399,6 +399,46 @@ body {
     border-color: var(--text-primary);
 }
 
+/* ── Connection color picker (in the New/Edit Connection modal) ─────────────── */
+.color-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.color-swatch {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    padding: 0;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+.color-swatch:hover {
+    transform: scale(1.08);
+}
+.color-swatch.selected {
+    border-color: var(--text-primary);
+}
+.color-swatch-none {
+    background: var(--bg-overlay);
+    background-image: linear-gradient(
+        to bottom right,
+        transparent calc(50% - 1px),
+        var(--accent-red) 50%,
+        transparent calc(50% + 1px)
+    );
+}
+
+/* ── Connection color dot (sidebar connection list) ──────────────────────── */
+.conn-color-dot {
+    width: 8px;
+    height: 8px;
+    min-width: 8px;
+    border-radius: 50%;
+    background: var(--border-bright);
+}
+
 .main-area {
     flex: 1;
     display: flex;
@@ -418,6 +458,10 @@ body {
     align-items: center;
     justify-content: space-between;
     border-bottom: 1px solid var(--border);
+    border-left: 3px solid transparent;
+}
+.sidebar-header.connected {
+    border-left-color: var(--conn-color, transparent);
 }
 
 /* ── Icon buttons ────────────────────────────────────────────────────────── */

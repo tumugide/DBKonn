@@ -40,6 +40,7 @@ fn pg_config() -> Option<ConnectionConfig> {
         database: Some(db),
         file_path: None,
         ssl_mode: SslMode::Prefer,
+        color: None,
     })
 }
 

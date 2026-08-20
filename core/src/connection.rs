@@ -39,6 +39,10 @@ pub struct ConnectionConfig {
     /// Path for SQLite file databases
     pub file_path: Option<String>,
     pub ssl_mode: SslMode,
+    /// User-assigned color tag (hex, e.g. "#e06c75") for telling connections
+    /// apart at a glance — e.g. red for production, green for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -196,6 +200,7 @@ impl ConnectionConfig {
             database,
             file_path,
             ssl_mode,
+            color: None,
         })
     }
 }
