@@ -833,7 +833,15 @@ function renderTableTabContent(_tab: TableTab) {
       await loadTableData();
     },
     onRowClick: (row, rowIndex) => selectRecord(row, rowIndex),
-    onSelectionChange: (indices) => updateSelectionBar(indices),
+    onSelectionChange: (indices) => {
+      updateSelectionBar(indices);
+      // Editing a single record's fields only makes sense when exactly one
+      // row is selected — close the panel for 0 or multi-row selections
+      // (onRowClick handles (re)opening it for the exactly-one-row case).
+      if (indices.length !== 1 && appState.selectedRecord.value) {
+        clearRecordSelection();
+      }
+    },
   });
 
   // Record panel
