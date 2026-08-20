@@ -60,9 +60,16 @@ impl ConnectionConfig {
             DbEngine::Postgres => {
                 let host = self.host.as_deref().unwrap_or("localhost");
                 let port = self.port.unwrap_or(5432);
-                let user = self.username.as_deref().unwrap_or("postgres");
-                let db = self.database.as_deref().unwrap_or("postgres");
-                let password = self.password.as_deref().unwrap_or("");
+                // Username/password/db are user-supplied and can contain
+                // characters like `@ : / ? #` that are structural in a URL
+                // (e.g. a password with a `#` gets read as the start of a
+                // fragment, shifting everything after it — including the
+                // port — out from under the parser, which then fails with
+                // a confusing "invalid port number"). Percent-encode each
+                // component so the URL always parses the way we intend.
+                let user = Self::encode_url_component(self.username.as_deref().unwrap_or("postgres"));
+                let db = Self::encode_url_component(self.database.as_deref().unwrap_or("postgres"));
+                let password = Self::encode_url_component(self.password.as_deref().unwrap_or(""));
                 // sqlx defaults to SslMode::Prefer when no `sslmode` param is
                 // present, so this must always be spelled out explicitly —
                 // otherwise the UI's SSL Mode selector (including "Disable")
@@ -84,9 +91,11 @@ impl ConnectionConfig {
             DbEngine::MySQL => {
                 let host = self.host.as_deref().unwrap_or("localhost");
                 let port = self.port.unwrap_or(3306);
-                let user = self.username.as_deref().unwrap_or("root");
-                let db = self.database.as_deref().unwrap_or("mysql");
-                let password = self.password.as_deref().unwrap_or("");
+                // See the Postgres branch above — same URL-injection risk
+                // from unescaped user/password/db, same fix.
+                let user = Self::encode_url_component(self.username.as_deref().unwrap_or("root"));
+                let db = Self::encode_url_component(self.database.as_deref().unwrap_or("mysql"));
+                let password = Self::encode_url_component(self.password.as_deref().unwrap_or(""));
                 // Same rationale as Postgres above — sqlx-mysql defaults to
                 // Preferred unless `ssl-mode` is spelled out explicitly.
                 let sslmode = match self.ssl_mode {
@@ -112,6 +121,13 @@ impl ConnectionConfig {
                 String::from("mssql://")
             }
         }
+    }
+
+    /// Percent-encode a URL user-info/path component (username, password,
+    /// or database name) so structural URL characters within it (`@ : / ?
+    /// #`) can't be misread as delimiters by the URL parser.
+    fn encode_url_component(s: &str) -> String {
+        percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC).to_string()
     }
 
     /// Parse a connection URL/DSN (e.g. `postgres://user:pass@host:5432/db`)

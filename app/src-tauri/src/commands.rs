@@ -20,7 +20,7 @@ pub async fn connect_db(
 ) -> Result<String, String> {
     // Inject password from Keychain if not provided
     if config.password.is_none() {
-        config.password = conn_store::get_password(&config.id);
+        config.password = conn_store::get_password_async(&config.id).await?;
     }
 
     let conn_id = config.id.clone();
@@ -49,7 +49,7 @@ pub async fn disconnect_db(
 pub async fn test_connection(mut config: ConnectionConfig) -> Result<bool, String> {
     // For test-connection, use whatever password is passed (transient, not saved)
     if config.password.is_none() {
-        config.password = conn_store::get_password(&config.id);
+        config.password = conn_store::get_password_async(&config.id).await?;
     }
     let driver = drivers::connect(&config)
         .await

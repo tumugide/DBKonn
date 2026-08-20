@@ -6,7 +6,7 @@ use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 use crate::{
-    connection::ConnectionConfig,
+    connection::{ConnectionConfig, SslMode},
     error::CoreError,
     query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo, TableInfo},
 };
@@ -33,9 +33,18 @@ impl MssqlDriver {
         let pass = config.password.as_deref().unwrap_or("");
         tib_config.authentication(AuthMethod::sql_server(user, pass));
 
+        // `tiberius::Config::default()` sets `EncryptionLevel::Required`
+        // regardless of what we pass it, so without this, selecting
+        // "Disable" in the UI had no effect: every connection still
+        // demanded TLS and failed against servers that don't offer it.
+        tib_config.encryption(match config.ssl_mode {
+            SslMode::Disable => tiberius::EncryptionLevel::NotSupported,
+            SslMode::Prefer => tiberius::EncryptionLevel::On,
+            SslMode::Require => tiberius::EncryptionLevel::Required,
+        });
+
         // Trust server cert for development; flag in UI for production use
-        // TODO: this ignores `config.ssl_mode` entirely — wire up proper cert
-        // validation when ssl_mode is Require.
+        // TODO: validate against a real CA when ssl_mode is Require.
         tib_config.trust_cert();
 
         // Test connect to ensure credentials are valid
