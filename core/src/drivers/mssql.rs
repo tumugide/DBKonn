@@ -260,6 +260,16 @@ impl DbConnection for MssqlDriver {
             .collect())
     }
 
+    async fn create_database(&self, name: &str) -> Result<(), CoreError> {
+        super::validate_db_name(name)?;
+        let mut client = self.get_client().await?;
+        client
+            .simple_query(&format!("CREATE DATABASE [{name}]"))
+            .await
+            .map_err(|e| CoreError::Query(e.to_string()))?;
+        Ok(())
+    }
+
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>, CoreError> {
         let mut client = self.get_client().await?;
         let stream = client

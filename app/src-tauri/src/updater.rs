@@ -4,20 +4,24 @@ use tauri::AppHandle;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_shell::ShellExt;
 
-const REPO_CONTENTS_API: &str =
-    "https://api.github.com/repos/tumugide/DBKonn/contents/appbuilds";
-const APPBUILDS_PAGE: &str = "https://github.com/tumugide/DBKonn/tree/main/appbuilds";
+const RELEASES_API: &str = "https://api.github.com/repos/tumugide/DBKonn/releases/latest";
 
 #[derive(Deserialize)]
-struct GithubContentEntry {
-    name: String,
+struct GithubRelease {
+    tag_name: String,
+    html_url: String,
+    assets: Vec<GithubAsset>,
 }
 
-/// Extracts the version from filenames like `DBKonn_0.1.0_aarch64.dmg`.
-fn parse_version_from_filename(name: &str) -> Option<Version> {
-    let rest = name.strip_prefix("DBKonn_")?;
-    let version_str = rest.split('_').next()?;
-    Version::parse(version_str).ok()
+#[derive(Deserialize)]
+struct GithubAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+/// Extracts the version from tags like `v0.1.4`.
+fn parse_version_from_tag(tag: &str) -> Option<Version> {
+    Version::parse(tag.strip_prefix('v').unwrap_or(tag)).ok()
 }
 
 pub async fn check_for_updates(app: AppHandle) {
@@ -31,7 +35,7 @@ pub async fn check_for_updates(app: AppHandle) {
         }
     };
 
-    let response = match client.get(REPO_CONTENTS_API).send().await {
+    let response = match client.get(RELEASES_API).send().await {
         Ok(response) => response,
         Err(err) => {
             show_error(&app, format!("Could not check for updates: {err}"));
@@ -47,21 +51,27 @@ pub async fn check_for_updates(app: AppHandle) {
         return;
     }
 
-    let entries: Vec<GithubContentEntry> = match response.json().await {
-        Ok(entries) => entries,
+    let release: GithubRelease = match response.json().await {
+        Ok(release) => release,
         Err(err) => {
             show_error(&app, format!("Could not read update information: {err}"));
             return;
         }
     };
 
-    let latest_version = entries
-        .iter()
-        .filter_map(|entry| parse_version_from_filename(&entry.name))
-        .max();
+    let latest_version = parse_version_from_tag(&release.tag_name);
 
     match latest_version {
         Some(latest) if latest > current_version => {
+            // Prefer linking straight to the Apple Silicon dmg asset; fall back to
+            // the release page itself if the asset naming ever changes.
+            let download_url = release
+                .assets
+                .iter()
+                .find(|a| a.name.ends_with("aarch64.dmg"))
+                .map(|a| a.browser_download_url.clone())
+                .unwrap_or(release.html_url);
+
             let app_for_callback = app.clone();
             app.dialog()
                 .message(format!(
@@ -75,7 +85,7 @@ pub async fn check_for_updates(app: AppHandle) {
                 ))
                 .show(move |download| {
                     if download {
-                        let _ = app_for_callback.shell().open(APPBUILDS_PAGE, None);
+                        let _ = app_for_callback.shell().open(download_url, None);
                     }
                 });
         }

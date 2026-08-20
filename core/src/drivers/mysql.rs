@@ -165,6 +165,14 @@ impl DbConnection for MySqlDriver {
         Ok(rows.iter().map(|r| r.get::<String, _>(0)).collect())
     }
 
+    async fn create_database(&self, name: &str) -> Result<(), CoreError> {
+        super::validate_db_name(name)?;
+        sqlx::query(&format!("CREATE DATABASE `{name}`"))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>, CoreError> {
         // MySQL uses databases as schemas
         let dbs = self.list_databases().await?;

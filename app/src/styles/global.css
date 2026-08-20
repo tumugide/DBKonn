@@ -494,6 +494,12 @@ body {
     background: color-mix(in srgb, var(--accent-red) 14%, transparent);
     color: var(--accent-red);
 }
+.btn-icon.spinning {
+    animation: dbkonn-spin 0.8s linear infinite;
+}
+@keyframes dbkonn-spin {
+    to { transform: rotate(360deg); }
+}
 
 /* ── Sidebar DB/Schema selectors ─────────────────────────────────────────── */
 .db-controls {

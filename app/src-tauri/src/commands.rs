@@ -77,6 +77,17 @@ pub async fn list_databases(
 }
 
 #[tauri::command]
+pub async fn create_database(
+    state: State<'_, AppState>,
+    conn_id: String,
+    name: String,
+) -> Result<(), String> {
+    let conns = state.connections.read().await;
+    let driver = conns.get(&conn_id).ok_or("Connection not found")?;
+    driver.create_database(&name).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn list_schemas(
     state: State<'_, AppState>,
     conn_id: String,

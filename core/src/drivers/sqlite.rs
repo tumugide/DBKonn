@@ -157,6 +157,12 @@ impl DbConnection for SqliteDriver {
             .collect())
     }
 
+    async fn create_database(&self, _name: &str) -> Result<(), CoreError> {
+        Err(CoreError::Unsupported(
+            "SQLite has no separate CREATE DATABASE — each database is its own file".into(),
+        ))
+    }
+
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>, CoreError> {
         Ok(vec![SchemaInfo {
             name: "main".to_string(),
