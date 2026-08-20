@@ -664,26 +664,6 @@ body {
     color: var(--text-primary);
     background: var(--bg-hover);
 }
-.table-tab-closeall {
-    border: none;
-    background: transparent;
-    color: var(--text-faint);
-    cursor: pointer;
-    padding: 0 8px;
-    font-size: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    margin-left: auto;
-    align-self: center;
-    height: 26px;
-    border-radius: var(--radius);
-}
-.table-tab-closeall:hover {
-    color: var(--accent-red);
-    background: var(--bg-hover);
-}
 
 /* ── Data grid ───────────────────────────────────────────────────────────── */
 .grid-container {
@@ -758,6 +738,52 @@ body {
 }
 .export-menu-item:hover {
     background: var(--bg-hover);
+}
+
+/* ── Right-click context menu ────────────────────────────────────────────── */
+.context-menu {
+    position: fixed;
+    z-index: 1000;
+    min-width: 190px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-mid);
+    border-radius: var(--radius);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    display: flex;
+    flex-direction: column;
+    padding: 4px;
+    gap: 1px;
+}
+.context-menu-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 6px 10px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-family: var(--font-family);
+    cursor: pointer;
+}
+.context-menu-item:hover:not(:disabled) {
+    background: var(--bg-hover);
+}
+.context-menu-item:disabled {
+    color: var(--text-faint);
+    cursor: default;
+}
+.context-menu-item.danger {
+    color: var(--accent-red);
+}
+.context-menu-item.danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-red) 14%, transparent);
+}
+.context-menu-separator {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 2px;
 }
 
 table.data-grid {
