@@ -71,6 +71,7 @@ function isNumericLiteral(value: string): boolean {
 }
 
 function formatFilterValue(
+  engine: DbEngine,
   operator: FilterOperator,
   value: string,
   dataType?: string,
@@ -78,7 +79,7 @@ function formatFilterValue(
   const trimmed = value.trim();
 
   if (STRING_OPS.includes(operator)) {
-    return quoteValue(trimmed);
+    return quoteValue(engine, trimmed);
   }
 
   if (
@@ -91,10 +92,10 @@ function formatFilterValue(
 
   // Text / unknown columns: always quote so varchar values like "0123" work.
   if (isTextDataType(dataType) || !isNumericDataType(dataType)) {
-    return quoteValue(trimmed);
+    return quoteValue(engine, trimmed);
   }
 
-  return isNumericLiteral(trimmed) ? trimmed : quoteValue(trimmed);
+  return isNumericLiteral(trimmed) ? trimmed : quoteValue(engine, trimmed);
 }
 
 export function compileWhereClause(
@@ -120,12 +121,12 @@ export function compileWhereClause(
         .filter((v) => v.length > 0);
       if (items.length === 0) continue;
       const list = items
-        .map((v) => formatFilterValue("=", v, dataType))
+        .map((v) => formatFilterValue(engine, "=", v, dataType))
         .join(", ");
       expr = `${col} ${r.operator} (${list})`;
     } else if (LIKE_OPS.includes(r.operator)) {
       if (!r.value.trim()) continue;
-      const pattern = quoteValue(likePattern(r.value));
+      const pattern = quoteValue(engine, likePattern(r.value));
       if (r.operator === "ILIKE" || r.operator === "NOT ILIKE") {
         if (engine === "postgres") {
           expr = `${col} ${r.operator} ${pattern}`;
@@ -138,7 +139,7 @@ export function compileWhereClause(
       }
     } else {
       if (!r.value.trim()) continue;
-      const val = formatFilterValue(r.operator, r.value, dataType);
+      const val = formatFilterValue(engine, r.operator, r.value, dataType);
       expr = `${col} ${r.operator} ${val}`;
     }
 

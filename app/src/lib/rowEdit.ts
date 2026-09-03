@@ -34,13 +34,17 @@ function formatSqlValue(engine: DbEngine, val: RowValue): string {
   }
   if (typeof val === "number") return String(val);
   if (typeof val === "string") {
-    if (val.startsWith("0x")) return val;
-    return quoteValue(val);
+    // Always quote. A previous `0x…` fast-path emitted the value into SQL
+    // unquoted, which is an injection sink for any text column holding a
+    // value that happens to start with "0x". Binary/BLOB columns can't be
+    // round-tripped through the driver's truncated hex preview anyway;
+    // proper binary editing is tracked separately.
+    return quoteValue(engine, val);
   }
   if (typeof val === "object") {
-    return quoteValue(JSON.stringify(val));
+    return quoteValue(engine, JSON.stringify(val));
   }
-  return quoteValue(String(val));
+  return quoteValue(engine, String(val));
 }
 
 function valuesEqual(a: RowValue, b: RowValue): boolean {

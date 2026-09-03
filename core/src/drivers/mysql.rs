@@ -4,12 +4,16 @@ use async_trait::async_trait;
 use sqlx::{mysql::MySqlPoolOptions, Column, MySqlPool, Row, TypeInfo, ValueRef};
 
 use crate::{
-    connection::ConnectionConfig,
+    connection::{ConnectionConfig, DbEngine},
     error::CoreError,
+    ident::quote_ident,
     query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo, TableInfo},
+    validator::validate_where_clause,
 };
 
 use super::DbConnection;
+
+const ENGINE: DbEngine = DbEngine::MySQL;
 
 pub struct MySqlDriver {
     pool: MySqlPool,
@@ -310,12 +314,18 @@ impl DbConnection for MySqlDriver {
         page: &PageRequest,
         where_clause: Option<&str>,
     ) -> Result<QueryResult, CoreError> {
+        validate_where_clause(where_clause.unwrap_or(""), &ENGINE)?;
+
         let db = schema.unwrap_or(&self.database);
-        let qualified = format!("`{}`.`{}`", db, table);
+        let qualified = format!(
+            "{}.{}",
+            quote_ident(&ENGINE, db),
+            quote_ident(&ENGINE, table)
+        );
 
         let order = if let Some(col) = &page.order_by {
             let dir = if page.order_desc { "DESC" } else { "ASC" };
-            format!("ORDER BY `{}` {}", col, dir)
+            format!("ORDER BY {} {}", quote_ident(&ENGINE, col), dir)
         } else {
             String::new()
         };
@@ -344,8 +354,14 @@ impl DbConnection for MySqlDriver {
         table: &str,
         where_clause: Option<&str>,
     ) -> Result<i64, CoreError> {
+        validate_where_clause(where_clause.unwrap_or(""), &ENGINE)?;
+
         let db = schema.unwrap_or(&self.database);
-        let qualified = format!("`{}`.`{}`", db, table);
+        let qualified = format!(
+            "{}.{}",
+            quote_ident(&ENGINE, db),
+            quote_ident(&ENGINE, table)
+        );
         let where_str = where_clause
             .filter(|s| !s.trim().is_empty())
             .map(|s| format!("WHERE {}", s))

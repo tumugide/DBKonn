@@ -4,12 +4,16 @@ use async_trait::async_trait;
 use sqlx::{sqlite::SqlitePoolOptions, Column, Row, SqlitePool, TypeInfo, ValueRef};
 
 use crate::{
-    connection::ConnectionConfig,
+    connection::{ConnectionConfig, DbEngine},
     error::CoreError,
+    ident::quote_ident,
     query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo, TableInfo},
+    validator::validate_where_clause,
 };
 
 use super::DbConnection;
+
+const ENGINE: DbEngine = DbEngine::SQLite;
 
 pub struct SqliteDriver {
     pool: SqlitePool,
@@ -194,7 +198,7 @@ impl DbConnection for SqliteDriver {
         _schema: Option<&str>,
         table: &str,
     ) -> Result<(Vec<ColumnInfo>, Vec<IndexInfo>), CoreError> {
-        let col_sql = format!("PRAGMA table_info(\"{}\")", table);
+        let col_sql = format!("PRAGMA table_info({})", quote_ident(&ENGINE, table));
         let col_rows = sqlx::query(&col_sql).fetch_all(&self.pool).await?;
 
         let columns: Vec<ColumnInfo> = col_rows
@@ -210,7 +214,7 @@ impl DbConnection for SqliteDriver {
             })
             .collect();
 
-        let idx_list_sql = format!("PRAGMA index_list(\"{}\")", table);
+        let idx_list_sql = format!("PRAGMA index_list({})", quote_ident(&ENGINE, table));
         let idx_list = sqlx::query(&idx_list_sql).fetch_all(&self.pool).await?;
 
         let mut indexes: Vec<IndexInfo> = vec![];
@@ -219,7 +223,7 @@ impl DbConnection for SqliteDriver {
             let is_unique: i64 = idx_row.get(2);
             let origin: String = idx_row.try_get(3).unwrap_or_default();
 
-            let info_sql = format!("PRAGMA index_info(\"{}\")", idx_name);
+            let info_sql = format!("PRAGMA index_info({})", quote_ident(&ENGINE, &idx_name));
             let info_rows = sqlx::query(&info_sql).fetch_all(&self.pool).await?;
             let cols: Vec<String> = info_rows
                 .iter()
@@ -272,9 +276,11 @@ impl DbConnection for SqliteDriver {
         page: &PageRequest,
         where_clause: Option<&str>,
     ) -> Result<QueryResult, CoreError> {
+        validate_where_clause(where_clause.unwrap_or(""), &ENGINE)?;
+
         let order = if let Some(col) = &page.order_by {
             let dir = if page.order_desc { "DESC" } else { "ASC" };
-            format!("ORDER BY \"{}\" {}", col, dir)
+            format!("ORDER BY {} {}", quote_ident(&ENGINE, col), dir)
         } else {
             String::new()
         };
@@ -285,8 +291,12 @@ impl DbConnection for SqliteDriver {
             .unwrap_or_default();
 
         let sql = format!(
-            "SELECT * FROM \"{}\" {} {} LIMIT {} OFFSET {}",
-            table, where_str, order, page.limit, page.offset
+            "SELECT * FROM {} {} {} LIMIT {} OFFSET {}",
+            quote_ident(&ENGINE, table),
+            where_str,
+            order,
+            page.limit,
+            page.offset
         );
 
         let mut result = self.execute_query(&sql).await?;
@@ -303,12 +313,18 @@ impl DbConnection for SqliteDriver {
         table: &str,
         where_clause: Option<&str>,
     ) -> Result<i64, CoreError> {
+        validate_where_clause(where_clause.unwrap_or(""), &ENGINE)?;
+
         let where_str = where_clause
             .filter(|s| !s.trim().is_empty())
             .map(|s| format!("WHERE {}", s))
             .unwrap_or_default();
 
-        let sql = format!("SELECT COUNT(*) FROM \"{}\" {}", table, where_str);
+        let sql = format!(
+            "SELECT COUNT(*) FROM {} {}",
+            quote_ident(&ENGINE, table),
+            where_str
+        );
         let row = sqlx::query(&sql)
             .fetch_one(&self.pool)
             .await
