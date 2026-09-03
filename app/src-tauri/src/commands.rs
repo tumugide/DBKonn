@@ -268,7 +268,7 @@ pub async fn delete_connection(
 /// No-op on platforms without the custom menu (the item map is empty).
 #[tauri::command]
 pub fn sync_theme_menu(state: State<AppState>, theme: String) {
-    let items = state.theme_menu_items.lock().unwrap();
+    let items = state.theme_menu_items.lock().unwrap_or_else(|e| e.into_inner());
     for (id, item) in items.iter() {
         let _ = item.set_checked(*id == theme);
     }
@@ -290,11 +290,11 @@ pub fn sync_query_menu(
     tabs: Vec<QueryTabMenuInfo>,
     active_tab_id: Option<String>,
 ) {
-    let Some(query_menu) = state.query_menu.lock().unwrap().clone() else {
+    let Some(query_menu) = state.query_menu.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
         return;
     };
 
-    let mut items = state.query_tab_items.lock().unwrap();
+    let mut items = state.query_tab_items.lock().unwrap_or_else(|e| e.into_inner());
     for (_, item) in items.drain() {
         let _ = query_menu.remove(&item);
     }

@@ -10,6 +10,7 @@ import {
   type QueryTab,
   type TableState,
   THEMES,
+  CONNECTION_COLORS,
 } from "./lib/store";
 import { DataGrid } from "./components/DataGrid";
 import { FilterBar } from "./components/FilterBar";
@@ -190,7 +191,7 @@ function renderSidebar() {
   if (ac) {
     // ── Connected mode ─────────────────────────────────────────────────────
     buf.push(`
-      <div class="sidebar-header connected" style="--conn-color:${ac.config.color ?? avatarColor(ac.config.id)}">
+      <div class="sidebar-header connected" style="--conn-color:${connColor(ac.config)}">
         <span class="sidebar-header-name" title="${esc(ac.config.name)}">${esc(ac.config.name)}</span>
         <div class="sidebar-header-actions">
           <button class="btn-icon" id="sb-refresh-tree" title="Refresh database (schemas and tables)" aria-label="Refresh database (schemas and tables)">⟳</button>
@@ -376,7 +377,7 @@ function renderConnList() {
     const item = document.createElement("div");
     item.className = "conn-item" + (ac?.config.id === cfg.id ? " active" : "");
     item.innerHTML = `
-      <span class="conn-color-dot" style="background:${cfg.color ?? avatarColor(cfg.id)}"></span>
+      <span class="conn-color-dot" style="background:${connColor(cfg)}"></span>
       <span class="conn-engine">${cfg.engine.slice(0, 2).toUpperCase()}</span>
       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(cfg.name)}</span>`;
     item.addEventListener("click", () => connectToDb(cfg));
@@ -405,6 +406,15 @@ function avatarColor(seed: string): string {
   return `hsl(${hue}, 55%, 42%)`;
 }
 
+// The connection color is written straight into inline `style="..."` — only
+// allow values from the curated palette; fall back to the deterministic
+// avatar color for anything else.
+function connColor(cfg: { id: string; color?: string }): string {
+  return cfg.color && CONNECTION_COLORS.includes(cfg.color)
+    ? cfg.color
+    : avatarColor(cfg.id);
+}
+
 function renderConnRail() {
   const sessions = appState.connSessions.value;
   const activeId = appState.activeConnId.value;
@@ -416,7 +426,7 @@ function renderConnRail() {
   sessions.forEach((s) => {
     const btn = document.createElement("button");
     btn.className = `conn-avatar${s.id === activeId ? " active" : ""}`;
-    btn.style.background = s.config.color ?? avatarColor(s.config.id);
+    btn.style.background = connColor(s.config);
     btn.title = s.config.name;
     btn.textContent = initialsFor(s.config.name);
     btn.onclick = () => switchToConnSession(s.id);

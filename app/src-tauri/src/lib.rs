@@ -68,7 +68,7 @@ fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
         .item(&new_query_item)
         .separator()
         .build()?;
-    *app.state::<state::AppState>().query_menu.lock().unwrap() = Some(query_menu.clone());
+    *app.state::<state::AppState>().query_menu.lock().unwrap_or_else(|e| e.into_inner()) = Some(query_menu.clone());
 
     let theme_menu = SubmenuBuilder::new(app, "Theme").build()?;
     let mut theme_items = std::collections::HashMap::new();
@@ -84,7 +84,7 @@ fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
         theme_menu.append(&item)?;
         theme_items.insert(id.to_string(), item);
     }
-    *app.state::<state::AppState>().theme_menu_items.lock().unwrap() = theme_items;
+    *app.state::<state::AppState>().theme_menu_items.lock().unwrap_or_else(|e| e.into_inner()) = theme_items;
 
     MenuBuilder::new(app)
         .items(&[
@@ -101,7 +101,7 @@ fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
 #[cfg(target_os = "macos")]
 fn set_theme_checked(app: &tauri::AppHandle, theme: &str) {
     let state = app.state::<state::AppState>();
-    let items = state.theme_menu_items.lock().unwrap();
+    let items = state.theme_menu_items.lock().unwrap_or_else(|e| e.into_inner());
     for (id, item) in items.iter() {
         let _ = item.set_checked(id == theme);
     }
