@@ -342,7 +342,8 @@ impl DbConnection for PgDriver {
         // schema. pg_class also surfaces materialized views, foreign tables
         // and partitioned tables, which information_schema.tables omits.
         let rows = sqlx::query(
-            "SELECT n.nspname, c.relname, c.relkind::text \
+            "SELECT n.nspname, c.relname, c.relkind::text, \
+                    CASE WHEN c.reltuples < 0 THEN NULL ELSE c.reltuples::bigint END \
              FROM pg_catalog.pg_class c \
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
              WHERE n.nspname = $1 \
@@ -368,7 +369,8 @@ impl DbConnection for PgDriver {
                     schema: r.get::<String, _>(0),
                     name: r.get::<String, _>(1),
                     table_type,
-                    row_count_estimate: None,
+                    // reltuples is -1 until the table is first ANALYZEd.
+                    row_count_estimate: r.try_get::<Option<i64>, _>(3).ok().flatten(),
                 }
             })
             .collect())

@@ -303,6 +303,29 @@ function updateTreeActiveState() {
   });
 }
 
+function tableIcon(type: string | undefined): string {
+  switch (type) {
+    case "view":
+      return "◇";
+    case "materialized view":
+      return "◈";
+    case "foreign table":
+      return "⊟";
+    default:
+      return "▦";
+  }
+}
+
+// Compact row-count estimate for the sidebar (1.2k, 3M). Estimates only —
+// from pg reltuples / MySQL TABLE_ROWS, never an exact COUNT.
+function compactCount(n: number | undefined): string {
+  if (n == null || n < 0) return "";
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  return `${(n / 1_000_000_000).toFixed(1)}B`;
+}
+
 // Rebuilds just the table-list container and its click listeners, without
 // touching the DB/schema dropdowns — used by both the initial renderSidebar()
 // build and refreshSchemaTree(), so there's one source of truth for the
@@ -317,7 +340,13 @@ function renderTableTree(ac: ConnSession) {
   treeEl.innerHTML = ac.tables
     .map((t) => {
       const active = t.name === ac.selectedTable ? " active" : "";
-      return `<div class="tree-item${active}" data-table="${esc(t.name)}">${esc(t.name)}</div>`;
+      const count = compactCount(t.row_count_estimate);
+      const typeLabel = t.table_type && t.table_type !== "table" ? ` · ${t.table_type}` : "";
+      return `<div class="tree-item${active}" data-table="${esc(t.name)}" title="${esc(t.name)}${typeLabel}${count ? ` · ~${t.row_count_estimate} rows` : ""}">
+        <span class="tree-item-icon">${tableIcon(t.table_type)}</span>
+        <span class="tree-item-name">${esc(t.name)}</span>
+        ${count ? `<span class="tree-item-count">${count}</span>` : ""}
+      </div>`;
     })
     .join("");
 

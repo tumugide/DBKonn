@@ -238,7 +238,7 @@ impl DbConnection for MySqlDriver {
     async fn list_tables(&self, schema: Option<&str>) -> Result<Vec<TableInfo>, CoreError> {
         let db = schema.unwrap_or(&self.database);
         let rows = sqlx::query(
-            "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE \
+            "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, TABLE_ROWS \
              FROM information_schema.TABLES \
              WHERE TABLE_SCHEMA = ? \
              ORDER BY TABLE_NAME",
@@ -256,7 +256,17 @@ impl DbConnection for MySqlDriver {
                     .get::<String, _>(2)
                     .to_lowercase()
                     .replace("base table", "table"),
-                row_count_estimate: None,
+                // TABLE_ROWS is an estimate for InnoDB, NULL for views.
+                row_count_estimate: r
+                    .try_get::<Option<i64>, _>(3)
+                    .ok()
+                    .flatten()
+                    .or_else(|| {
+                        r.try_get::<Option<u64>, _>(3)
+                            .ok()
+                            .flatten()
+                            .map(|v| v as i64)
+                    }),
             })
             .collect())
     }

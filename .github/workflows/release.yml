@@ -12,9 +12,47 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ---------------------------------------------------------------------
+  # Every merge to main becomes a new patch release. The version is
+  # DERIVED from the latest v* git tag (v0.1.4 -> v0.1.5) and stamped
+  # into the source files inside the CI workspace only — nothing is
+  # pushed back to main, so the branch ruleset never gets in the way.
+  # The committed version fields are just a starting floor; the real
+  # version lives in the git tags and the published releases.
+  # ---------------------------------------------------------------------
+  version:
+    name: Compute next version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next patch version
+        id: next
+        run: |
+          set -euo pipefail
+          latest="$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n1)"
+          if [ -z "$latest" ]; then
+            base="$(jq -r .version app/src-tauri/tauri.conf.json)"
+          else
+            base="${latest#v}"
+          fi
+          IFS='.' read -r major minor patch <<< "$base"
+          patch=$((patch + 1))
+          next="${major}.${minor}.${patch}"
+          echo "Latest tag: ${latest:-<none>}  ->  next version: ${next}"
+          echo "version=${next}" >> "$GITHUB_OUTPUT"
+
   release-macos:
     name: Build & Release (macOS - Apple Silicon)
+    needs: version
     runs-on: macos-14
+    env:
+      APP_VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -39,9 +77,21 @@ jobs:
         working-directory: app
         run: bun install --frozen-lockfile
 
-      - name: Read app version
-        id: version
-        run: echo "version=$(jq -r .version app/src-tauri/tauri.conf.json)" >> "$GITHUB_OUTPUT"
+      - name: Stamp version
+        run: |
+          set -euo pipefail
+          v="$APP_VERSION"
+          # Workspace crate version — covers core, cli and app,
+          # which all inherit it via `version.workspace = true`.
+          sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"$v\"/" Cargo.toml && rm Cargo.toml.bak
+          # Tauri bundle + in-app updater version.
+          jq --arg v "$v" '.version = $v' app/src-tauri/tauri.conf.json > tauri.tmp && mv tauri.tmp app/src-tauri/tauri.conf.json
+          # Frontend package version.
+          jq --arg v "$v" '.version = $v' app/package.json > pkg.tmp && mv pkg.tmp app/package.json
+          echo "Stamped version $v:"
+          grep -n '^version = ' Cargo.toml
+          jq -r '.version' app/src-tauri/tauri.conf.json
+          jq -r '.version' app/package.json
 
       - name: Build macOS (Apple Silicon)
         working-directory: app/src-tauri
@@ -52,8 +102,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: DBKonn v${{ steps.version.outputs.version }}
+          tag_name: v${{ env.APP_VERSION }}
+          name: DBKonn v${{ env.APP_VERSION }}
           draft: false
           prerelease: false
           files: |
@@ -64,7 +114,10 @@ jobs:
   # ---------------------------------------------------------------------
   # release-windows:
   #   name: Build & Release (Windows)
+  #   needs: version
   #   runs-on: windows-latest
+  #   env:
+  #     APP_VERSION: ${{ needs.version.outputs.version }}
   #   steps:
   #     - name: Checkout code
   #       uses: actions/checkout@v4
@@ -89,10 +142,14 @@ jobs:
   #       working-directory: app
   #       run: bun install --frozen-lockfile
   #
-  #     - name: Read app version
-  #       id: version
+  #     - name: Stamp version
   #       shell: bash
-  #       run: echo "version=$(jq -r .version app/src-tauri/tauri.conf.json)" >> "$GITHUB_OUTPUT"
+  #       run: |
+  #         set -euo pipefail
+  #         v="$APP_VERSION"
+  #         sed -i -E "s/^version = \"[^\"]+\"/version = \"$v\"/" Cargo.toml
+  #         jq --arg v "$v" '.version = $v' app/src-tauri/tauri.conf.json > tauri.tmp && mv tauri.tmp app/src-tauri/tauri.conf.json
+  #         jq --arg v "$v" '.version = $v' app/package.json > pkg.tmp && mv pkg.tmp app/package.json
   #
   #     - name: Build Windows (x86_64)
   #       working-directory: app/src-tauri
@@ -103,8 +160,8 @@ jobs:
   #       env:
   #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   #       with:
-  #         tag_name: v${{ steps.version.outputs.version }}
-  #         name: DBKonn v${{ steps.version.outputs.version }}
+  #         tag_name: v${{ env.APP_VERSION }}
+  #         name: DBKonn v${{ env.APP_VERSION }}
   #         files: |
   #           target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
   #           target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
@@ -114,7 +171,10 @@ jobs:
   # ---------------------------------------------------------------------
   # release-linux:
   #   name: Build & Release (Linux)
+  #   needs: version
   #   runs-on: ubuntu-22.04
+  #   env:
+  #     APP_VERSION: ${{ needs.version.outputs.version }}
   #   steps:
   #     - name: Checkout code
   #       uses: actions/checkout@v4
@@ -144,9 +204,13 @@ jobs:
   #       working-directory: app
   #       run: bun install --frozen-lockfile
   #
-  #     - name: Read app version
-  #       id: version
-  #       run: echo "version=$(jq -r .version app/src-tauri/tauri.conf.json)" >> "$GITHUB_OUTPUT"
+  #     - name: Stamp version
+  #       run: |
+  #         set -euo pipefail
+  #         v="$APP_VERSION"
+  #         sed -i -E "s/^version = \"[^\"]+\"/version = \"$v\"/" Cargo.toml
+  #         jq --arg v "$v" '.version = $v' app/src-tauri/tauri.conf.json > tauri.tmp && mv tauri.tmp app/src-tauri/tauri.conf.json
+  #         jq --arg v "$v" '.version = $v' app/package.json > pkg.tmp && mv pkg.tmp app/package.json
   #
   #     - name: Build Linux (x86_64)
   #       working-directory: app/src-tauri
@@ -157,8 +221,8 @@ jobs:
   #       env:
   #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   #       with:
-  #         tag_name: v${{ steps.version.outputs.version }}
-  #         name: DBKonn v${{ steps.version.outputs.version }}
+  #         tag_name: v${{ env.APP_VERSION }}
+  #         name: DBKonn v${{ env.APP_VERSION }}
   #         files: |
   #           target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
   #           target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage

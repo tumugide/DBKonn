@@ -625,9 +625,32 @@ body {
     text-overflow: ellipsis;
     border-radius: var(--radius);
 }
+.tree-item-icon {
+    flex-shrink: 0;
+    color: var(--text-faint);
+    font-size: 11px;
+    width: 12px;
+    text-align: center;
+}
+.tree-item-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.tree-item-count {
+    flex-shrink: 0;
+    font-size: 10.5px;
+    color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
+}
 .tree-item:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+}
+.tree-item.active .tree-item-icon,
+.tree-item:hover .tree-item-icon {
+    color: var(--text-muted);
 }
 .tree-item.active {
     color: var(--text-primary);
