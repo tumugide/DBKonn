@@ -54,6 +54,11 @@ pub trait DbConnection: Send + Sync {
         table: &str,
         where_clause: Option<&str>,
     ) -> Result<i64, CoreError>;
+
+    /// Close the underlying connection pool (if any) so server-side
+    /// connections are released promptly on disconnect rather than lingering
+    /// until the handle is dropped. Default: no-op (for poolless drivers).
+    async fn close(&self) {}
 }
 
 /// Validates a user-supplied database name before it's interpolated into a

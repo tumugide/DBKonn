@@ -1,6 +1,6 @@
 import "./styles/global.css";
 import { listen } from "@tauri-apps/api/event";
-import { ipc, type ConnectionConfig, type ColumnInfo } from "./lib/ipc";
+import { ipc, type ConnectionConfig, type ColumnInfo, type IndexInfo } from "./lib/ipc";
 import {
   appState,
   type ThemeType,
@@ -10,6 +10,7 @@ import {
   type QueryTab,
   type TableState,
   THEMES,
+  CONNECTION_COLORS,
 } from "./lib/store";
 import { DataGrid } from "./components/DataGrid";
 import { FilterBar } from "./components/FilterBar";
@@ -17,6 +18,9 @@ import { SqlEditor } from "./components/SqlEditor";
 import { RecordPanel } from "./components/RecordPanel";
 import { showConnectionModal } from "./components/ConnectionModal";
 import { showCreateDatabaseModal } from "./components/CreateDatabaseModal";
+import { showStructureModal } from "./components/StructureModal";
+import { escapeHtml as esc } from "./lib/escape";
+import { wireModalDismissal } from "./lib/modal";
 import { createExportButton } from "./components/ExportMenu";
 import { showContextMenu } from "./components/ContextMenu";
 import { cloneRowValue, buildDeleteSql } from "./lib/rowEdit";
@@ -90,9 +94,7 @@ function showAppearanceModal() {
   });
 
   overlay.querySelector("#am-close")!.addEventListener("click", () => overlay.remove());
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) overlay.remove();
-  });
+  wireModalDismissal(overlay, () => overlay.remove());
 }
 
 // ── App Shell ─────────────────────────────────────────────────────────────────
@@ -189,8 +191,8 @@ function renderSidebar() {
   if (ac) {
     // ── Connected mode ─────────────────────────────────────────────────────
     buf.push(`
-      <div class="sidebar-header connected" style="--conn-color:${ac.config.color ?? avatarColor(ac.config.id)}">
-        <span>${esc(ac.config.name)}</span>
+      <div class="sidebar-header connected" style="--conn-color:${connColor(ac.config)}">
+        <span class="sidebar-header-name" title="${esc(ac.config.name)}">${esc(ac.config.name)}</span>
         <div class="sidebar-header-actions">
           <button class="btn-icon" id="sb-refresh-tree" title="Refresh database (schemas and tables)" aria-label="Refresh database (schemas and tables)">⟳</button>
           <button class="btn-icon danger" id="sb-disconnect" title="Disconnect">Quit</button>
@@ -302,6 +304,29 @@ function updateTreeActiveState() {
   });
 }
 
+function tableIcon(type: string | undefined): string {
+  switch (type) {
+    case "view":
+      return "◇";
+    case "materialized view":
+      return "◈";
+    case "foreign table":
+      return "⊟";
+    default:
+      return "▦";
+  }
+}
+
+// Compact row-count estimate for the sidebar (1.2k, 3M). Estimates only —
+// from pg reltuples / MySQL TABLE_ROWS, never an exact COUNT.
+function compactCount(n: number | undefined): string {
+  if (n == null || n < 0) return "";
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  return `${(n / 1_000_000_000).toFixed(1)}B`;
+}
+
 // Rebuilds just the table-list container and its click listeners, without
 // touching the DB/schema dropdowns — used by both the initial renderSidebar()
 // build and refreshSchemaTree(), so there's one source of truth for the
@@ -316,7 +341,13 @@ function renderTableTree(ac: ConnSession) {
   treeEl.innerHTML = ac.tables
     .map((t) => {
       const active = t.name === ac.selectedTable ? " active" : "";
-      return `<div class="tree-item${active}" data-table="${esc(t.name)}">${esc(t.name)}</div>`;
+      const count = compactCount(t.row_count_estimate);
+      const typeLabel = t.table_type && t.table_type !== "table" ? ` · ${t.table_type}` : "";
+      return `<div class="tree-item${active}" data-table="${esc(t.name)}" title="${esc(t.name)}${typeLabel}${count ? ` · ~${t.row_count_estimate} rows` : ""}">
+        <span class="tree-item-icon">${tableIcon(t.table_type)}</span>
+        <span class="tree-item-name">${esc(t.name)}</span>
+        ${count ? `<span class="tree-item-count">${count}</span>` : ""}
+      </div>`;
     })
     .join("");
 
@@ -346,7 +377,7 @@ function renderConnList() {
     const item = document.createElement("div");
     item.className = "conn-item" + (ac?.config.id === cfg.id ? " active" : "");
     item.innerHTML = `
-      <span class="conn-color-dot" style="background:${cfg.color ?? avatarColor(cfg.id)}"></span>
+      <span class="conn-color-dot" style="background:${connColor(cfg)}"></span>
       <span class="conn-engine">${cfg.engine.slice(0, 2).toUpperCase()}</span>
       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(cfg.name)}</span>`;
     item.addEventListener("click", () => connectToDb(cfg));
@@ -375,6 +406,15 @@ function avatarColor(seed: string): string {
   return `hsl(${hue}, 55%, 42%)`;
 }
 
+// The connection color is written straight into inline `style="..."` — only
+// allow values from the curated palette; fall back to the deterministic
+// avatar color for anything else.
+function connColor(cfg: { id: string; color?: string }): string {
+  return cfg.color && CONNECTION_COLORS.includes(cfg.color)
+    ? cfg.color
+    : avatarColor(cfg.id);
+}
+
 function renderConnRail() {
   const sessions = appState.connSessions.value;
   const activeId = appState.activeConnId.value;
@@ -386,7 +426,7 @@ function renderConnRail() {
   sessions.forEach((s) => {
     const btn = document.createElement("button");
     btn.className = `conn-avatar${s.id === activeId ? " active" : ""}`;
-    btn.style.background = s.config.color ?? avatarColor(s.config.id);
+    btn.style.background = connColor(s.config);
     btn.title = s.config.name;
     btn.textContent = initialsFor(s.config.name);
     btn.onclick = () => switchToConnSession(s.id);
@@ -434,9 +474,22 @@ function renderConnRail() {
 
 // ── Database / Schema switching ───────────────────────────────────────────────
 
+let switchDatabaseInFlight = false;
+
 async function switchDatabase(dbName: string) {
   const ac = appState.activeConn.value;
   if (!ac || ac.selectedDatabase === dbName) return;
+
+  // Switching database disconnects/reconnects and drops every open tab —
+  // don't do that silently on top of an unsaved row edit. Re-render the
+  // sidebar so the DB dropdown snaps back to the current database if the
+  // user cancels.
+  if (!confirmDiscardIfDirty()) {
+    renderSidebar();
+    return;
+  }
+  if (switchDatabaseInFlight) return;
+  switchDatabaseInFlight = true;
 
   appState.status.set(`Switching to database: ${dbName}…`);
 
@@ -478,6 +531,8 @@ async function switchDatabase(dbName: string) {
   } catch (e) {
     appState.status.set(`Error: ${e}`);
     statusDot.className = "status-dot error";
+  } finally {
+    switchDatabaseInFlight = false;
   }
 }
 
@@ -525,15 +580,31 @@ async function refreshSchemaTree(opts?: { silent?: boolean }) {
   if (!opts?.silent) refreshBtn?.classList.add("spinning");
 
   try {
-    const [databases, schemas, tables] = await Promise.all([
+    // Resolve databases/schemas first, THEN list tables for the *effective*
+    // schema. Fetching tables up-front with a possibly-stale
+    // `ac.selectedSchema` (and, on MySQL, the schema instead of the database)
+    // returned an empty list that then blanked the whole table tree.
+    const [databases, schemas] = await Promise.all([
       ipc.listDatabases(ac.connId).catch(() => ac.databases),
       ipc.listSchemas(ac.connId).catch(() => ac.schemas),
-      ipc.listTables(ac.connId, ac.selectedSchema).catch(() => ac.tables),
     ]);
 
     const selectedSchema = schemas.some((s) => s.name === ac.selectedSchema)
       ? ac.selectedSchema
-      : (schemas.find((s) => s.name === "public" || s.name === "dbo")?.name ?? schemas[0]?.name);
+      : (schemas.find((s) => s.name === "public" || s.name === "dbo")?.name ??
+        schemas[0]?.name ??
+        ac.selectedSchema);
+
+    // MySQL browses tables by database, not by information_schema schema.
+    const tableScope =
+      ac.config.engine === "mysql"
+        ? (ac.selectedDatabase ?? selectedSchema)
+        : selectedSchema;
+
+    const tables = await ipc
+      .listTables(ac.connId, tableScope)
+      .catch(() => ac.tables);
+
     const selectedTable = tables.some((t) => t.name === ac.selectedTable) ? ac.selectedTable : undefined;
 
     const updated = { ...ac, databases, schemas, selectedSchema, tables, selectedTable };
@@ -553,6 +624,15 @@ async function refreshSchemaTree(opts?: { silent?: boolean }) {
     if (appState.activeConn.value?.id !== sessionId) return;
 
     appState.activeConn.set(updated);
+
+    // If the connected sidebar isn't currently mounted (e.g. this ran right
+    // after a focus switch, before renderSidebar), rebuild it wholesale
+    // instead of no-op'ing on the missing tree container.
+    if (!document.getElementById("sb-table-tree")) {
+      renderSidebar();
+      if (!opts?.silent) appState.status.set("Schema refreshed");
+      return;
+    }
 
     renderTableTree(updated);
 
@@ -600,6 +680,23 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("focus", startAutoRefresh);
 window.addEventListener("blur", stopAutoRefresh);
+
+// F5 — advertised in the grid toolbar tooltip but previously unhandled.
+// Reloads the active table tab's rows in place, or refreshes the schema
+// tree when the active tab isn't a table.
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "F5" || e.metaKey || e.ctrlKey || e.altKey) return;
+  e.preventDefault();
+  const activeId = appState.activeTab.value;
+  const tab = appState.openTabs.value.find((t) => t.id === activeId);
+  if (tab?.kind === "table" && activeTableReload) {
+    if (!confirmDiscardIfDirty()) return;
+    clearRecordSelection();
+    activeTableReload();
+  } else {
+    void refreshSchemaTree();
+  }
+});
 
 // Disconnects a single connection session — the focused one (from the
 // sidebar "Quit" button) or a background one (from the rail's hover-×) —
@@ -689,6 +786,26 @@ let dataGrid: DataGrid | null = null;
 let filterBar: FilterBar | null = null;
 let recordPanel: RecordPanel | null = null;
 
+// Monotonic id for the active table tab's in-flight data fetch (A14), and a
+// handle to that tab's `loadTableData` so pagination can reload rows in place
+// instead of tearing down and rebuilding the whole tab (A28).
+let tableDataRequestSeq = 0;
+let activeTableReload: (() => void) | null = null;
+
+// Tears down the components owned by the previously-rendered tab body so
+// their document/theme subscriptions and CodeMirror views don't leak each
+// time a tab is (re)rendered.
+function destroyActiveTabComponents() {
+  sqlEditor?.destroy();
+  dataGrid?.destroy();
+  filterBar?.destroy();
+  sqlEditor = null;
+  dataGrid = null;
+  filterBar = null;
+  recordPanel = null;
+  activeTableReload = null;
+}
+
 function confirmDiscardIfDirty(): boolean {
   const rec = appState.selectedRecord.value;
   if (rec?.dirty) {
@@ -725,6 +842,7 @@ function renderContentArea() {
 }
 
 function renderActiveTabContent() {
+  destroyActiveTabComponents();
   mainContent.innerHTML = "";
   mainContent.style.overflow = "";
   mainContent.style.padding = "";
@@ -803,6 +921,11 @@ function renderQueryTabContent(tab: QueryTab) {
           if (!ac3) return;
           const result = await ipc.executeQuery(ac3.connId, sql);
           if (result.error) throw new Error(result.error);
+          if (result.affected_rows === 0) {
+            throw new Error(
+              "No rows were updated — this row may have been changed or deleted by someone else, or the query has no key column to match it.",
+            );
+          }
           appState.status.set(
             `Updated ${result.affected_rows ?? 1} row(s) · ${result.execution_time_ms}ms`,
           );
@@ -907,6 +1030,21 @@ function renderTableTabContent(_tab: TableTab) {
     void loadTableData();
   };
 
+  // Latest index metadata for this table (fed by loadTableMetadata) — used
+  // by the Structure modal. describe_table already returns it; it used to be
+  // destructured away and dropped.
+  let lastIndexes: IndexInfo[] = [];
+
+  const structureBtn = document.createElement("button");
+  structureBtn.className = "btn btn-secondary";
+  structureBtn.innerHTML = "⚙ Structure";
+  structureBtn.title = "Show columns & indexes";
+  structureBtn.onclick = () => {
+    const cols = appState.tableMetadata.value;
+    const label = `${schemaForEngine() ? schemaForEngine() + "." : ""}${ac.selectedTable}`;
+    showStructureModal(label, cols, lastIndexes);
+  };
+
   const exportBtn = createExportButton({
     formats: ["csv", "tsv", "xlsx", "json", "markdown", "html", "sql"],
     onSelect: (format) => exportData(format),
@@ -917,6 +1055,7 @@ function renderTableTabContent(_tab: TableTab) {
   rowInfo.style.cssText = "font-size:11px;color:var(--text-muted);flex:1;";
 
   toolbar.appendChild(refreshBtn);
+  toolbar.appendChild(structureBtn);
   toolbar.appendChild(exportBtn.element);
   toolbar.appendChild(rowInfo);
   tableMain.appendChild(toolbar);
@@ -999,6 +1138,11 @@ function renderTableTabContent(_tab: TableTab) {
       if (!ac2) return;
       const result = await ipc.executeQuery(ac2.connId, sql);
       if (result.error) throw new Error(result.error);
+      if (result.affected_rows === 0) {
+        throw new Error(
+          "No rows were updated — this row may have been changed or deleted by someone else, or the table has no key to match it. Reload the table to see the current data.",
+        );
+      }
       appState.status.set(
         `Updated ${result.affected_rows ?? 1} row(s) · ${result.execution_time_ms}ms`,
       );
@@ -1009,6 +1153,20 @@ function renderTableTabContent(_tab: TableTab) {
         appState.selectedRecord.set(updated);
         recordPanel?.show(updated);
       }
+      await loadTableData();
+    },
+    onDelete: async (sql) => {
+      const ac2 = appState.activeConn.value;
+      if (!ac2) return;
+      const result = await ipc.executeQuery(ac2.connId, sql);
+      if (result.error) throw new Error(result.error);
+      if (result.affected_rows === 0) {
+        throw new Error(
+          "No rows were deleted — this row may already be gone, or the table has no key to match it.",
+        );
+      }
+      appState.status.set(`Deleted 1 row · ${result.execution_time_ms}ms`);
+      clearRecordSelection();
       await loadTableData();
     },
     onClose: () => clearRecordSelection(),
@@ -1024,6 +1182,10 @@ function renderTableTabContent(_tab: TableTab) {
   pagination.id = "pagination";
   tableMain.appendChild(pagination);
 
+  // Expose this tab's reload so changePage/changePageSize can refresh rows in
+  // place rather than rebuilding the entire tab (which re-issues describeTable
+  // and leaks the torn-down components).
+  activeTableReload = () => void loadTableData();
   loadTableData();
 
   function selectRecord(row: RowValue[], rowIndex: number) {
@@ -1046,11 +1208,12 @@ function renderTableTabContent(_tab: TableTab) {
     const ac2 = appState.activeConn.value;
     if (!ac2?.selectedTable) return;
     try {
-      const [columns] = await ipc.describeTable(
+      const [columns, indexes] = await ipc.describeTable(
         ac2.connId,
         schemaForEngine(),
         ac2.selectedTable,
       );
+      lastIndexes = indexes;
       appState.tableMetadata.set(columns);
       recordPanel?.setColumns(columns);
     } catch (e) {
@@ -1064,7 +1227,21 @@ function renderTableTabContent(_tab: TableTab) {
     const ac2 = appState.activeConn.value;
     if (!ac2?.selectedTable) return;
 
+    // Guard against a slow response painting stale rows onto a grid that has
+    // since moved on (fast table switch, late auto-refresh). Only the most
+    // recent call is allowed to touch the grid.
+    const reqId = ++tableDataRequestSeq;
+    const reqConnId = ac2.connId;
+    const reqTable = ac2.selectedTable;
+    const isCurrent = () => {
+      if (reqId !== tableDataRequestSeq) return false;
+      const now = appState.activeConn.value;
+      return !!now && now.connId === reqConnId && now.selectedTable === reqTable;
+    };
+
     rowInfo.textContent = "Loading…";
+    dataGrid?.setLoading(true);
+    appState.tableState.set({ ...s, loading: true });
 
     try {
       const [rows, total] = await Promise.all([
@@ -1088,9 +1265,21 @@ function renderTableTabContent(_tab: TableTab) {
         ),
       ]);
 
+      if (!isCurrent()) return;
+      dataGrid?.setLoading(false);
+
       if (rows.error) {
         rowInfo.textContent = `Error: ${rows.error}`;
         return;
+      }
+
+      // A delete/filter can leave `page` past the last page — clamp and
+      // refetch so the grid isn't stranded on an empty out-of-range page
+      // ("Rows 21–5 of 5").
+      const maxPage = Math.max(0, Math.ceil(total / s.pageSize) - 1);
+      if (s.page > maxPage) {
+        appState.tableState.set({ ...appState.tableState.value, page: maxPage });
+        return loadTableData();
       }
 
       appState.tableState.set({
@@ -1114,6 +1303,11 @@ function renderTableTabContent(_tab: TableTab) {
       renderPagination(pagination, total, s.page, s.pageSize);
     } catch (e) {
       rowInfo.textContent = `Error: ${e}`;
+    } finally {
+      if (isCurrent()) {
+        dataGrid?.setLoading(false);
+        appState.tableState.set({ ...appState.tableState.value, loading: false });
+      }
     }
   }
 
@@ -1125,7 +1319,7 @@ function renderTableTabContent(_tab: TableTab) {
     try {
       const result = await ipc.fetchTableRows(
         ac2.connId,
-        ac2.selectedSchema,
+        schemaForEngine(),
         ac2.selectedTable,
         {
           limit: MAX_EXPORT_ROWS,
@@ -1145,6 +1339,7 @@ function renderTableTabContent(_tab: TableTab) {
         result.rows,
         `${ac2.selectedTable}.${formatMeta[format].ext}`,
         ac2.selectedTable,
+        ac2.config.engine,
       );
     } catch (e) {
       alert(`Export failed: ${e}`);
@@ -1209,7 +1404,13 @@ function renderTableTabContent(_tab: TableTab) {
         alert(`Delete failed: ${res.error}`);
         return;
       }
-      appState.status.set(`Deleted ${res.affected_rows ?? sel.rows.length} row(s)`);
+      if (res.affected_rows === 0) {
+        alert(
+          "No rows were deleted — they may have already been removed, or this table has no key column to match them. Reloading the table.",
+        );
+      } else {
+        appState.status.set(`Deleted ${res.affected_rows ?? sel.rows.length} row(s)`);
+      }
       dataGrid?.clearSelection();
       await loadTableData();
     } catch (e) {
@@ -1228,6 +1429,7 @@ function renderTableTabContent(_tab: TableTab) {
         sel.rows,
         `${ac2.selectedTable}_selected.${formatMeta[format].ext}`,
         ac2.selectedTable,
+        ac2.config.engine,
       );
     } catch (e) {
       alert(`Export failed: ${e}`);
@@ -1306,18 +1508,42 @@ function changePage(newPage: number) {
   clearRecordSelection();
   const s = appState.tableState.value;
   appState.tableState.set({ ...s, page: newPage });
-  renderActiveTabContent();
+  // Reload rows in place when we can; only fall back to a full tab rebuild if
+  // this isn't a live table tab.
+  if (activeTableReload) activeTableReload();
+  else renderActiveTabContent();
 }
+
+const ALL_PAGE_CONFIRM_THRESHOLD = 50_000;
 
 function changePageSize(newPageSize: number) {
   if (!confirmDiscardIfDirty()) return;
-  clearRecordSelection();
   const s = appState.tableState.value;
+  // "All" pulls the whole table into memory in one grid. Warn before doing
+  // that on a large (or unknown-size) table.
+  if (
+    newPageSize >= PAGE_SIZE_ALL &&
+    (s.totalRows === 0 || s.totalRows > ALL_PAGE_CONFIRM_THRESHOLD)
+  ) {
+    const rowsText =
+      s.totalRows > 0 ? `${s.totalRows.toLocaleString()} rows` : "every row";
+    if (
+      !confirm(
+        `Load ${rowsText} into the grid at once? This can be slow and use a lot of memory.`,
+      )
+    ) {
+      renderActiveTabContent(); // reset the page-size <select>
+      return;
+    }
+  }
+  clearRecordSelection();
   appState.tableState.set({ ...s, pageSize: newPageSize, page: 0 });
-  renderActiveTabContent();
+  if (activeTableReload) activeTableReload();
+  else renderActiveTabContent();
 }
 
 function showConnectionsScreen() {
+  destroyActiveTabComponents();
   mainContent.innerHTML = "";
   mainContent.style.overflow = "auto";
   mainContent.style.padding = "20px";
@@ -1415,8 +1641,21 @@ function showConnectionsScreen() {
 
 // Raw IPC connect + metadata load — no signal/UI writes. Returns a fresh,
 // unfocused ConnSession with an empty tab strip.
-async function establishConnSession(cfg: ConnectionConfig): Promise<ConnSession> {
-  const connId = await ipc.connectDb(cfg);
+async function establishConnSession(
+  cfg: ConnectionConfig,
+  overrideDatabase?: string,
+): Promise<ConnSession> {
+  // If a specific database is wanted (saved config, or a restored session),
+  // actually connect to it — don't connect to the engine default and just
+  // *display* a different name. That mismatch made the DB dropdown a no-op
+  // (switchDatabase's "already selected" guard) and left the tree empty
+  // because every query hit the wrong database.
+  const effectiveCfg: ConnectionConfig =
+    overrideDatabase && overrideDatabase !== cfg.database
+      ? { ...cfg, database: overrideDatabase }
+      : cfg;
+
+  const connId = await ipc.connectDb(effectiveCfg);
 
   const [databases, schemas] = await Promise.all([
     ipc.listDatabases(connId).catch(() => [] as string[]),
@@ -1431,14 +1670,32 @@ async function establishConnSession(cfg: ConnectionConfig): Promise<ConnSession>
   // table list matches it — same as every later switchSchema() call does.
   const tables = await ipc.listTables(connId, defaultSchema);
 
-  // For engines without a database concept (SQLite), use the config's db name
-  const selectedDb =
-    cfg.database || (databases.length > 0 ? databases[0] : undefined);
+  // The database the connection actually landed on. With no explicit db the
+  // engine picks its own default ("postgres", "mysql", the login default) —
+  // ask it rather than guessing `databases[0]`.
+  let selectedDb = effectiveCfg.database || undefined;
+  if (
+    !selectedDb &&
+    (effectiveCfg.engine === "postgres" || effectiveCfg.engine === "mysql")
+  ) {
+    const dbQuery =
+      effectiveCfg.engine === "postgres"
+        ? "SELECT current_database()"
+        : "SELECT DATABASE()";
+    try {
+      const r = await ipc.executeQuery(connId, dbQuery);
+      const v = r.rows?.[0]?.[0];
+      if (typeof v === "string" && v) selectedDb = v;
+    } catch {
+      /* fall through to the databases[0] guess below */
+    }
+  }
+  if (!selectedDb && databases.length > 0) selectedDb = databases[0];
 
   return {
     id: crypto.randomUUID(),
     connId,
-    config: cfg,
+    config: effectiveCfg,
     databases,
     selectedDatabase: selectedDb,
     schemas,
@@ -1512,6 +1769,11 @@ function switchToConnSession(id: string) {
 // instead of starting blank. Entries are removed once a reconnect succeeds.
 const pendingRestores = new Map<string, StoredConnSession>();
 
+// Saved-config ids with a connect currently in flight. Two fast clicks on a
+// "Connect" button both passed the `existing` check (which only sees
+// *completed* sessions) and each opened its own duplicate live session.
+const connectInFlight = new Set<string>();
+
 // The interactive "user picked a saved connection" path — opens a new
 // session alongside whatever else is already connected, or just focuses it
 // if it's already open. `restoreParam` (used by boot()) seeds it with a
@@ -1523,6 +1785,8 @@ async function connectToDb(cfg: ConnectionConfig, restoreParam?: StoredConnSessi
     switchToConnSession(existing.id);
     return;
   }
+  if (connectInFlight.has(cfg.id)) return;
+  connectInFlight.add(cfg.id);
 
   const restore = restoreParam ?? pendingRestores.get(cfg.id);
 
@@ -1530,10 +1794,9 @@ async function connectToDb(cfg: ConnectionConfig, restoreParam?: StoredConnSessi
   statusDot.className = "status-dot";
 
   try {
-    const session = await establishConnSession(cfg);
+    const session = await establishConnSession(cfg, restore?.selectedDatabase);
 
     if (restore) {
-      session.selectedDatabase = restore.selectedDatabase ?? session.selectedDatabase;
       session.selectedSchema = restore.selectedSchema ?? session.selectedSchema;
       session.openTabs = remapRestoredTabs(restore.tabs, session.connId);
       session.activeTabId =
@@ -1554,6 +1817,8 @@ async function connectToDb(cfg: ConnectionConfig, restoreParam?: StoredConnSessi
     statusDot.className = "status-dot error";
     appState.status.set(`Error: ${e}`);
     alert(`Connection failed:\n${e}`);
+  } finally {
+    connectInFlight.delete(cfg.id);
   }
 }
 
@@ -1603,8 +1868,7 @@ async function boot() {
 
   const results = await Promise.allSettled(
     restorable.map(async ({ stored: s, cfg }) => {
-      const session = await establishConnSession(cfg);
-      session.selectedDatabase = s.selectedDatabase ?? session.selectedDatabase;
+      const session = await establishConnSession(cfg, s.selectedDatabase);
       session.selectedSchema = s.selectedSchema ?? session.selectedSchema;
       session.openTabs = remapRestoredTabs(s.tabs, session.connId);
       session.activeTabId =
@@ -2092,14 +2356,6 @@ function openQueryTab() {
   persistSessionNow();
 }
 
-// ── Utils ─────────────────────────────────────────────────────────────────────
-function esc(s: string): string {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 // Best-effort detection of "this query is really just browsing one table",
 // so the read-only query-result panel can offer in-place editing. Bails out

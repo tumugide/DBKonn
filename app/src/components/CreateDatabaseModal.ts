@@ -1,4 +1,5 @@
 import { ipc } from "../lib/ipc";
+import { wireModalDismissal } from "../lib/modal";
 
 const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -74,7 +75,5 @@ export function showCreateDatabaseModal(
   overlay
     .querySelector("#cdm-cancel")!
     .addEventListener("click", () => overlay.remove());
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) overlay.remove();
-  });
+  wireModalDismissal(overlay, () => overlay.remove());
 }

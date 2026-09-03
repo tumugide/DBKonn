@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use dbkonn_core::{
     connection::ConnectionConfig,
-    drivers,
+    drivers::{self, DbConnection},
     query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, SchemaInfo, TableInfo},
     validator,
 };
@@ -10,6 +12,20 @@ use crate::{
     connections as conn_store,
     state::AppState,
 };
+
+/// Clone the live driver handle for `conn_id` out of the connection map under
+/// a brief read lock, then release the lock. The caller runs the actual query
+/// on the returned `Arc` with no lock held — see `AppState::connections`.
+async fn driver_for(
+    state: &State<'_, AppState>,
+    conn_id: &str,
+) -> Result<Arc<dyn DbConnection>, String> {
+    let conns = state.connections.read().await;
+    conns
+        .get(conn_id)
+        .cloned()
+        .ok_or_else(|| "Connection not found".to_string())
+}
 
 // ── Connection lifecycle ──────────────────────────────────────────────────────
 
@@ -25,12 +41,20 @@ pub async fn connect_db(
 
     let conn_id = config.id.clone();
 
-    let driver = drivers::connect(&config)
+    let driver: Arc<dyn DbConnection> = drivers::connect(&config)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .into();
 
-    let mut conns = state.connections.write().await;
-    conns.insert(conn_id.clone(), driver);
+    // Swap the new driver in under a short write lock; close any driver it
+    // replaced (same id reconnecting) afterwards, off-lock.
+    let previous = {
+        let mut conns = state.connections.write().await;
+        conns.insert(conn_id.clone(), driver)
+    };
+    if let Some(old) = previous {
+        old.close().await;
+    }
 
     Ok(conn_id)
 }
@@ -40,8 +64,15 @@ pub async fn disconnect_db(
     state: State<'_, AppState>,
     conn_id: String,
 ) -> Result<(), String> {
-    let mut conns = state.connections.write().await;
-    conns.remove(&conn_id);
+    let removed = {
+        let mut conns = state.connections.write().await;
+        conns.remove(&conn_id)
+    };
+    if let Some(driver) = removed {
+        // Close the pool so server-side connections are dropped now, not
+        // whenever the last Arc clone (a query still in flight) goes away.
+        driver.close().await;
+    }
     Ok(())
 }
 
@@ -54,14 +85,11 @@ pub async fn test_connection(mut config: ConnectionConfig) -> Result<bool, Strin
     let driver = drivers::connect(&config)
         .await
         .map_err(|e| e.to_string())?;
-    driver.test_connection().await.map_err(|e| e.to_string())?;
+    let result = driver.test_connection().await.map_err(|e| e.to_string());
+    // This is a throwaway connection — don't leave its pool open.
+    driver.close().await;
+    result?;
     Ok(true)
-}
-
-#[tauri::command]
-pub async fn get_active_connections(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    let conns = state.connections.read().await;
-    Ok(conns.keys().cloned().collect())
 }
 
 // ── Schema discovery ──────────────────────────────────────────────────────────
@@ -71,8 +99,7 @@ pub async fn list_databases(
     state: State<'_, AppState>,
     conn_id: String,
 ) -> Result<Vec<String>, String> {
-    let conns = state.connections.read().await;
-    let driver = conns.get(&conn_id).ok_or("Connection not found")?;
+    let driver = driver_for(&state, &conn_id).await?;
     driver.list_databases().await.map_err(|e| e.to_string())
 }
 
@@ -82,8 +109,7 @@ pub async fn create_database(
     conn_id: String,
     name: String,
 ) -> Result<(), String> {
-    let conns = state.connections.read().await;
-    let driver = conns.get(&conn_id).ok_or("Connection not found")?;
+    let driver = driver_for(&state, &conn_id).await?;
     driver.create_database(&name).await.map_err(|e| e.to_string())
 }
 
@@ -92,8 +118,7 @@ pub async fn list_schemas(
     state: State<'_, AppState>,
     conn_id: String,
 ) -> Result<Vec<SchemaInfo>, String> {
-    let conns = state.connections.read().await;
-    let driver = conns.get(&conn_id).ok_or("Connection not found")?;
+    let driver = driver_for(&state, &conn_id).await?;
     driver.list_schemas().await.map_err(|e| e.to_string())
 }
 
@@ -103,8 +128,7 @@ pub async fn list_tables(
     conn_id: String,
     schema: Option<String>,
 ) -> Result<Vec<TableInfo>, String> {
-    let conns = state.connections.read().await;
-    let driver = conns.get(&conn_id).ok_or("Connection not found")?;
+    let driver = driver_for(&state, &conn_id).await?;
     driver
         .list_tables(schema.as_deref())
         .await
@@ -118,8 +142,7 @@ pub async fn describe_table(
     schema: Option<String>,
     table: String,
 ) -> Result<(Vec<ColumnInfo>, Vec<IndexInfo>), String> {
-    let conns = state.connections.read().await;
-    let driver = conns.get(&conn_id).ok_or("Connection not found")?;
+    let driver = driver_for(&state, &conn_id).await?;
     driver
         .describe_table(schema.as_deref(), &table)
         .await
@@ -134,8 +157,7 @@ pub async fn execute_query(
     conn_id: String,
     sql: String,
 ) -> Result<QueryResult, String> {
-    let conns = state.connections.read().await;
-    let driver = conns.get(&conn_id).ok_or("Connection not found")?;
+    let driver = driver_for(&state, &conn_id).await?;
     driver.execute_query(&sql).await.map_err(|e| e.to_string())
 }
 
@@ -148,8 +170,7 @@ pub async fn fetch_table_rows(
     page: PageRequest,
     where_clause: Option<String>,
 ) -> Result<QueryResult, String> {
-    let conns = state.connections.read().await;
-    let driver = conns.get(&conn_id).ok_or("Connection not found")?;
+    let driver = driver_for(&state, &conn_id).await?;
     driver
         .fetch_table_rows(schema.as_deref(), &table, &page, where_clause.as_deref())
         .await
@@ -164,8 +185,7 @@ pub async fn count_rows(
     table: String,
     where_clause: Option<String>,
 ) -> Result<i64, String> {
-    let conns = state.connections.read().await;
-    let driver = conns.get(&conn_id).ok_or("Connection not found")?;
+    let driver = driver_for(&state, &conn_id).await?;
     driver
         .count_rows(schema.as_deref(), &table, where_clause.as_deref())
         .await
@@ -199,7 +219,7 @@ pub async fn save_connection(mut config: ConnectionConfig) -> Result<String, Str
         conn_store::store_password(&config.id, &pw).map_err(|e| e.to_string())?;
     }
 
-    let mut conns = conn_store::load_connections();
+    let mut conns = conn_store::load_connections()?;
     // Upsert: replace existing with same id
     if let Some(pos) = conns.iter().position(|c| c.id == config.id) {
         conns[pos] = config.clone();
@@ -213,7 +233,7 @@ pub async fn save_connection(mut config: ConnectionConfig) -> Result<String, Str
 
 #[tauri::command]
 pub async fn load_connections() -> Result<Vec<ConnectionConfig>, String> {
-    Ok(conn_store::load_connections())
+    conn_store::load_connections()
 }
 
 #[tauri::command]
@@ -221,17 +241,20 @@ pub async fn delete_connection(
     state: State<'_, AppState>,
     conn_id: String,
 ) -> Result<(), String> {
-    // Remove active connection if open
-    {
+    // Remove active connection if open, closing its pool off-lock.
+    let removed = {
         let mut conns = state.connections.write().await;
-        conns.remove(&conn_id);
+        conns.remove(&conn_id)
+    };
+    if let Some(driver) = removed {
+        driver.close().await;
     }
 
     // Remove from Keychain
     conn_store::delete_password(&conn_id);
 
     // Remove from disk
-    let mut conns = conn_store::load_connections();
+    let mut conns = conn_store::load_connections()?;
     conns.retain(|c| c.id != conn_id);
     conn_store::save_connections(&conns)?;
 
@@ -245,7 +268,7 @@ pub async fn delete_connection(
 /// No-op on platforms without the custom menu (the item map is empty).
 #[tauri::command]
 pub fn sync_theme_menu(state: State<AppState>, theme: String) {
-    let items = state.theme_menu_items.lock().unwrap();
+    let items = state.theme_menu_items.lock().unwrap_or_else(|e| e.into_inner());
     for (id, item) in items.iter() {
         let _ = item.set_checked(*id == theme);
     }
@@ -267,11 +290,11 @@ pub fn sync_query_menu(
     tabs: Vec<QueryTabMenuInfo>,
     active_tab_id: Option<String>,
 ) {
-    let Some(query_menu) = state.query_menu.lock().unwrap().clone() else {
+    let Some(query_menu) = state.query_menu.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
         return;
     };
 
-    let mut items = state.query_tab_items.lock().unwrap();
+    let mut items = state.query_tab_items.lock().unwrap_or_else(|e| e.into_inner());
     for (_, item) in items.drain() {
         let _ = query_menu.remove(&item);
     }

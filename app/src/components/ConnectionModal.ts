@@ -1,5 +1,7 @@
 import { ipc, type ConnectionConfig, type DbEngine } from "../lib/ipc";
 import { appState, CONNECTION_COLORS } from "../lib/store";
+import { escapeHtml as esc } from "../lib/escape";
+import { wireModalDismissal } from "../lib/modal";
 
 function genId(): string {
   return crypto.randomUUID
@@ -248,9 +250,7 @@ export function showConnectionModal(
   overlay
     .querySelector("#cm-cancel")!
     .addEventListener("click", () => overlay.remove());
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) overlay.remove();
-  });
+  wireModalDismissal(overlay, () => overlay.remove());
 
   function setStatus(msg: string, style: string) {
     statusEl.textContent = msg;
@@ -259,11 +259,4 @@ export function showConnectionModal(
       `font-size:11px;min-height:16px;margin-top:4px;${style}`,
     );
   }
-}
-
-function esc(s: string): string {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;");
 }

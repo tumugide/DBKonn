@@ -4,12 +4,16 @@ use async_trait::async_trait;
 use sqlx::{postgres::PgPoolOptions, Column, PgPool, Row, TypeInfo, ValueRef};
 
 use crate::{
-    connection::ConnectionConfig,
+    connection::{ConnectionConfig, DbEngine},
     error::CoreError,
+    ident::quote_ident,
     query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo, TableInfo},
+    validator::validate_where_clause,
 };
 
 use super::DbConnection;
+
+const ENGINE: DbEngine = DbEngine::Postgres;
 
 pub struct PgDriver {
     pool: PgPool,
@@ -80,7 +84,7 @@ fn pg_value_to_row_value(row: &sqlx::postgres::PgRow, idx: usize) -> RowValue {
             .unwrap_or(RowValue::Null),
 
         // ── Arbitrary-precision numeric ──────────────────────────────────────
-        "numeric" | "decimal" | "money" => row
+        "numeric" | "decimal" => row
             .try_get::<rust_decimal::Decimal, _>(idx)
             .map(|d| RowValue::Text(d.to_string()))
             .unwrap_or_else(|_| {
@@ -89,6 +93,20 @@ fn pg_value_to_row_value(row: &sqlx::postgres::PgRow, idx: usize) -> RowValue {
                     .map(RowValue::Float)
                     .unwrap_or(RowValue::Null)
             }),
+
+        // `money` is a distinct 64-bit type: not decode-compatible with
+        // `Decimal` or `f64`, so it used to fall through to NULL. It's an
+        // integer count of the smallest currency unit (cents for 2-digit
+        // locales); render it as a plain decimal string.
+        "money" => row
+            .try_get::<sqlx::postgres::types::PgMoney, _>(idx)
+            .map(|m| {
+                let cents = m.0;
+                let sign = if cents < 0 { "-" } else { "" };
+                let abs = (cents as i128).unsigned_abs();
+                RowValue::Text(format!("{sign}{}.{:02}", abs / 100, abs % 100))
+            })
+            .unwrap_or(RowValue::Null),
 
         // ── Text variants ───────────────────────────────────────────────────
         "text" | "varchar" | "character varying" | "char" | "bpchar"
@@ -316,11 +334,21 @@ impl DbConnection for PgDriver {
 
     async fn list_tables(&self, schema: Option<&str>) -> Result<Vec<TableInfo>, CoreError> {
         let schema = schema.unwrap_or("public");
+        // Query pg_catalog directly rather than information_schema.tables.
+        // information_schema views are filtered to objects the connecting
+        // role has some privilege on, so a low-privilege login (or one that
+        // only has USAGE on the schema) got an empty table list even though
+        // `list_schemas` — which reads pg_namespace — still showed the
+        // schema. pg_class also surfaces materialized views, foreign tables
+        // and partitioned tables, which information_schema.tables omits.
         let rows = sqlx::query(
-            "SELECT table_schema, table_name, table_type \
-             FROM information_schema.tables \
-             WHERE table_schema = $1 \
-             ORDER BY table_name",
+            "SELECT n.nspname, c.relname, c.relkind::text, \
+                    CASE WHEN c.reltuples < 0 THEN NULL ELSE c.reltuples::bigint END \
+             FROM pg_catalog.pg_class c \
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = $1 \
+               AND c.relkind = ANY(ARRAY['r','p','v','m','f']::\"char\"[]) \
+             ORDER BY c.relname",
         )
         .bind(schema)
         .fetch_all(&self.pool)
@@ -328,14 +356,22 @@ impl DbConnection for PgDriver {
 
         Ok(rows
             .iter()
-            .map(|r| TableInfo {
-                schema: r.get::<String, _>(0),
-                name: r.get::<String, _>(1),
-                table_type: r
-                    .get::<String, _>(2)
-                    .to_lowercase()
-                    .replace("base table", "table"),
-                row_count_estimate: None,
+            .map(|r| {
+                let relkind: String = r.get(2);
+                let table_type = match relkind.as_str() {
+                    "v" => "view",
+                    "m" => "materialized view",
+                    "f" => "foreign table",
+                    _ => "table", // 'r' ordinary, 'p' partitioned
+                }
+                .to_string();
+                TableInfo {
+                    schema: r.get::<String, _>(0),
+                    name: r.get::<String, _>(1),
+                    table_type,
+                    // reltuples is -1 until the table is first ANALYZEd.
+                    row_count_estimate: r.try_get::<Option<i64>, _>(3).ok().flatten(),
+                }
             })
             .collect())
     }
@@ -417,7 +453,14 @@ impl DbConnection for PgDriver {
                     data_type,
                     nullable: r.get::<String, _>(3) == "YES",
                     default_value: r.try_get::<Option<String>, _>(4).ok().flatten(),
-                    max_length: r.try_get::<Option<i64>, _>(5).ok().flatten(),
+                    // information_schema.character_maximum_length is `integer`
+                    // (i32), not i64 — reading it as i64 always failed and
+                    // max_length came back None for every column.
+                    max_length: r
+                        .try_get::<Option<i32>, _>(5)
+                        .ok()
+                        .flatten()
+                        .map(|v| v as i64),
                     is_primary_key: r.get::<bool, _>(6),
                     enum_values,
                 }
@@ -463,15 +506,8 @@ impl DbConnection for PgDriver {
 
     async fn execute_query(&self, sql: &str) -> Result<QueryResult, CoreError> {
         let start = Instant::now();
-        let sql_lower = sql.trim().to_lowercase();
 
-        let is_fetch = sql_lower.starts_with("select")
-            || sql_lower.starts_with("explain")
-            || sql_lower.starts_with("show")
-            || sql_lower.starts_with("with")
-            || sql_lower.starts_with("table");
-
-        if is_fetch {
+        if crate::query::statement_returns_rows(sql) {
             let rows = sqlx::query(sql)
                 .fetch_all(&self.pool)
                 .await
@@ -497,12 +533,18 @@ impl DbConnection for PgDriver {
         page: &PageRequest,
         where_clause: Option<&str>,
     ) -> Result<QueryResult, CoreError> {
+        validate_where_clause(where_clause.unwrap_or(""), &ENGINE)?;
+
         let schema = schema.unwrap_or("public");
-        let qualified = format!("\"{}\".\"{}\"", schema, table);
+        let qualified = format!(
+            "{}.{}",
+            quote_ident(&ENGINE, schema),
+            quote_ident(&ENGINE, table)
+        );
 
         let order = if let Some(col) = &page.order_by {
             let dir = if page.order_desc { "DESC" } else { "ASC" };
-            format!("ORDER BY \"{}\" {}", col, dir)
+            format!("ORDER BY {} {}", quote_ident(&ENGINE, col), dir)
         } else {
             String::new()
         };
@@ -531,8 +573,14 @@ impl DbConnection for PgDriver {
         table: &str,
         where_clause: Option<&str>,
     ) -> Result<i64, CoreError> {
+        validate_where_clause(where_clause.unwrap_or(""), &ENGINE)?;
+
         let schema = schema.unwrap_or("public");
-        let qualified = format!("\"{}\".\"{}\"", schema, table);
+        let qualified = format!(
+            "{}.{}",
+            quote_ident(&ENGINE, schema),
+            quote_ident(&ENGINE, table)
+        );
         let where_str = where_clause
             .filter(|s| !s.trim().is_empty())
             .map(|s| format!("WHERE {}", s))
@@ -544,5 +592,9 @@ impl DbConnection for PgDriver {
             .await
             .map_err(|e| CoreError::Query(e.to_string()))?;
         Ok(row.get::<i64, _>(0))
+    }
+
+    async fn close(&self) {
+        self.pool.close().await;
     }
 }

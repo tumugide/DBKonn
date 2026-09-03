@@ -6,12 +6,16 @@ use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 use crate::{
-    connection::{ConnectionConfig, SslMode},
+    connection::{ConnectionConfig, DbEngine, SslMode},
     error::CoreError,
+    ident::quote_ident,
     query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo, TableInfo},
+    validator::validate_where_clause,
 };
 
 use super::DbConnection;
+
+const ENGINE: DbEngine = DbEngine::MSSQL;
 
 pub struct MssqlDriver {
     config: tiberius::Config,
@@ -43,9 +47,15 @@ impl MssqlDriver {
             SslMode::Require => tiberius::EncryptionLevel::Required,
         });
 
-        // Trust server cert for development; flag in UI for production use
-        // TODO: validate against a real CA when ssl_mode is Require.
-        tib_config.trust_cert();
+        // Only skip certificate verification when the user has NOT asked for
+        // authenticated transport. On "Require" we keep tiberius's default
+        // trust (the OS root store) so a man-in-the-middle presenting a
+        // self-signed cert is rejected instead of silently accepted.
+        // Support for a user-supplied CA / client cert is a follow-up.
+        match config.ssl_mode {
+            SslMode::Disable | SslMode::Prefer => tib_config.trust_cert(),
+            SslMode::Require => {}
+        }
 
         // Test connect to ensure credentials are valid
         let tcp = TcpStream::connect(tib_config.get_addr())
@@ -207,6 +217,44 @@ fn tiberius_cell_to_row_value(row: &Row, i: usize, col_type: ColumnType) -> RowV
     }
 }
 
+/// Map a tiberius `ColumnType` (a TDS wire tag) to a readable SQL type name
+/// for the result grid header. The grid used to show the raw `{:?}` debug
+/// form (`BigVarChar`, `Intn`, …), which leaked internal tag names.
+fn mssql_type_name(ct: ColumnType) -> &'static str {
+    match ct {
+        ColumnType::Null => "null",
+        ColumnType::Bit | ColumnType::Bitn => "bit",
+        ColumnType::Int1 => "tinyint",
+        ColumnType::Int2 => "smallint",
+        ColumnType::Int4 => "int",
+        ColumnType::Int8 => "bigint",
+        ColumnType::Intn => "int",
+        ColumnType::Float4 => "real",
+        ColumnType::Float8 => "float",
+        ColumnType::Floatn => "float",
+        ColumnType::Money | ColumnType::Money4 => "money",
+        ColumnType::Decimaln | ColumnType::Numericn => "decimal",
+        ColumnType::Guid => "uniqueidentifier",
+        ColumnType::Datetime | ColumnType::Datetime4 | ColumnType::Datetimen => "datetime",
+        ColumnType::Datetime2 => "datetime2",
+        ColumnType::Daten => "date",
+        ColumnType::Timen => "time",
+        ColumnType::DatetimeOffsetn => "datetimeoffset",
+        ColumnType::BigVarChar => "varchar",
+        ColumnType::BigChar => "char",
+        ColumnType::NVarchar => "nvarchar",
+        ColumnType::NChar => "nchar",
+        ColumnType::Text => "text",
+        ColumnType::NText => "ntext",
+        ColumnType::BigVarBin => "varbinary",
+        ColumnType::BigBinary => "binary",
+        ColumnType::Image => "image",
+        ColumnType::Xml => "xml",
+        ColumnType::Udt => "udt",
+        ColumnType::SSVariant => "sql_variant",
+    }
+}
+
 fn tiberius_rows_to_query_result(
     col_names: Vec<String>,
     col_types: Vec<String>,
@@ -303,16 +351,15 @@ impl DbConnection for MssqlDriver {
     async fn list_tables(&self, schema: Option<&str>) -> Result<Vec<TableInfo>, CoreError> {
         let schema = schema.unwrap_or("dbo");
         let mut client = self.get_client().await?;
-        let sql = format!(
-            "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE \
-             FROM information_schema.TABLES \
-             WHERE TABLE_SCHEMA = '{}' \
-             ORDER BY TABLE_NAME",
-            schema
-        );
 
         let stream = client
-            .simple_query(&sql)
+            .query(
+                "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE \
+                 FROM information_schema.TABLES \
+                 WHERE TABLE_SCHEMA = @P1 \
+                 ORDER BY TABLE_NAME",
+                &[&schema],
+            )
             .await
             .map_err(|e| CoreError::Query(e.to_string()))?;
 
@@ -344,28 +391,26 @@ impl DbConnection for MssqlDriver {
         let schema = schema.unwrap_or("dbo");
         let mut client = self.get_client().await?;
 
-        let col_sql = format!(
-            "SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT,
-                    c.CHARACTER_MAXIMUM_LENGTH,
-                    CAST(CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS BIT) AS IS_PK
-             FROM information_schema.COLUMNS c
-             LEFT JOIN (
-                 SELECT ku.TABLE_SCHEMA, ku.TABLE_NAME, ku.COLUMN_NAME
-                 FROM information_schema.TABLE_CONSTRAINTS tc
-                 JOIN information_schema.KEY_COLUMN_USAGE ku
-                   ON tc.CONSTRAINT_NAME = ku.CONSTRAINT_NAME
-                   AND tc.TABLE_SCHEMA = ku.TABLE_SCHEMA
-                 WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
-             ) pk ON pk.TABLE_SCHEMA = c.TABLE_SCHEMA
-                  AND pk.TABLE_NAME = c.TABLE_NAME
-                  AND pk.COLUMN_NAME = c.COLUMN_NAME
-             WHERE c.TABLE_SCHEMA = '{}' AND c.TABLE_NAME = '{}'
-             ORDER BY c.ORDINAL_POSITION",
-            schema, table
-        );
-
         let stream = client
-            .simple_query(&col_sql)
+            .query(
+                "SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT,
+                        c.CHARACTER_MAXIMUM_LENGTH,
+                        CAST(CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS BIT) AS IS_PK
+                 FROM information_schema.COLUMNS c
+                 LEFT JOIN (
+                     SELECT ku.TABLE_SCHEMA, ku.TABLE_NAME, ku.COLUMN_NAME
+                     FROM information_schema.TABLE_CONSTRAINTS tc
+                     JOIN information_schema.KEY_COLUMN_USAGE ku
+                       ON tc.CONSTRAINT_NAME = ku.CONSTRAINT_NAME
+                       AND tc.TABLE_SCHEMA = ku.TABLE_SCHEMA
+                     WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+                 ) pk ON pk.TABLE_SCHEMA = c.TABLE_SCHEMA
+                      AND pk.TABLE_NAME = c.TABLE_NAME
+                      AND pk.COLUMN_NAME = c.COLUMN_NAME
+                 WHERE c.TABLE_SCHEMA = @P1 AND c.TABLE_NAME = @P2
+                 ORDER BY c.ORDINAL_POSITION",
+                &[&schema, &table],
+            )
             .await
             .map_err(|e| CoreError::Query(e.to_string()))?;
 
@@ -381,26 +426,26 @@ impl DbConnection for MssqlDriver {
                 data_type: r.get::<&str, _>(1).unwrap_or("").to_string(),
                 nullable: r.get::<&str, _>(2).unwrap_or("YES") == "YES",
                 default_value: r.get::<&str, _>(3).map(|s| s.to_string()),
-                max_length: r.get::<i64, _>(4),
+                // CHARACTER_MAXIMUM_LENGTH is `int` (i32) on SQL Server;
+                // asking tiberius for i64 always failed → always None.
+                max_length: r.get::<i32, _>(4).map(|v| v as i64),
                 is_primary_key: r.get::<bool, _>(5).unwrap_or(false),
                 enum_values: None,
             })
             .collect();
 
         // Indexes
-        let idx_sql = format!(
-            "SELECT i.name, COL_NAME(ic.object_id, ic.column_id), i.is_unique, i.is_primary_key
-             FROM sys.indexes i
-             JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
-             JOIN sys.tables t ON i.object_id = t.object_id
-             JOIN sys.schemas s ON t.schema_id = s.schema_id
-             WHERE s.name = '{}' AND t.name = '{}'
-             ORDER BY i.name, ic.key_ordinal",
-            schema, table
-        );
-
         let stream2 = client
-            .simple_query(&idx_sql)
+            .query(
+                "SELECT i.name, COL_NAME(ic.object_id, ic.column_id), i.is_unique, i.is_primary_key
+                 FROM sys.indexes i
+                 JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+                 JOIN sys.tables t ON i.object_id = t.object_id
+                 JOIN sys.schemas s ON t.schema_id = s.schema_id
+                 WHERE s.name = @P1 AND t.name = @P2
+                 ORDER BY i.name, ic.key_ordinal",
+                &[&schema, &table],
+            )
             .await
             .map_err(|e| CoreError::Query(e.to_string()))?;
 
@@ -434,13 +479,7 @@ impl DbConnection for MssqlDriver {
         let start = Instant::now();
         let mut client = self.get_client().await?;
 
-        let sql_lower = sql.trim().to_lowercase();
-        let is_fetch = sql_lower.starts_with("select")
-            || sql_lower.starts_with("with")
-            || sql_lower.starts_with("exec")
-            || sql_lower.starts_with("explain");
-
-        if is_fetch {
+        if crate::query::statement_returns_rows(sql) {
             let stream = client
                 .simple_query(sql)
                 .await
@@ -453,11 +492,10 @@ impl DbConnection for MssqlDriver {
 
             let elapsed = start.elapsed();
 
-            if let Some(rows) = result_set.into_iter().next() {
-                if rows.is_empty() {
-                    return Ok(QueryResult::from_duration(elapsed));
-                }
-
+            // Skip leading empty result sets (e.g. from a `SET`/`PRINT` before
+            // the real SELECT) instead of blindly taking the first and
+            // reporting no rows.
+            if let Some(rows) = result_set.into_iter().find(|rs| !rs.is_empty()) {
                 let col_names: Vec<String> = rows[0]
                     .columns()
                     .iter()
@@ -466,7 +504,7 @@ impl DbConnection for MssqlDriver {
                 let col_types: Vec<String> = rows[0]
                     .columns()
                     .iter()
-                    .map(|c| format!("{:?}", c.column_type()))
+                    .map(|c| mssql_type_name(c.column_type()).to_string())
                     .collect();
 
                 let data_rows: Vec<Vec<RowValue>> =
@@ -479,12 +517,16 @@ impl DbConnection for MssqlDriver {
                 Ok(QueryResult::from_duration(elapsed))
             }
         } else {
-            client
+            let result = client
                 .execute(sql, &[])
                 .await
                 .map_err(|e| CoreError::Query(e.to_string()))?;
             let elapsed = start.elapsed();
-            Ok(QueryResult::from_duration(elapsed))
+            let mut qr = QueryResult::from_duration(elapsed);
+            // Sum the per-statement counts so the UI can report "N rows
+            // affected" like the pooled engines do.
+            qr.affected_rows = Some(result.rows_affected().iter().sum());
+            Ok(qr)
         }
     }
 
@@ -495,12 +537,18 @@ impl DbConnection for MssqlDriver {
         page: &PageRequest,
         where_clause: Option<&str>,
     ) -> Result<QueryResult, CoreError> {
+        validate_where_clause(where_clause.unwrap_or(""), &ENGINE)?;
+
         let schema = schema.unwrap_or("dbo");
-        let qualified = format!("[{}].[{}]", schema, table);
+        let qualified = format!(
+            "{}.{}",
+            quote_ident(&ENGINE, schema),
+            quote_ident(&ENGINE, table)
+        );
 
         let order = if let Some(col) = &page.order_by {
             let dir = if page.order_desc { "DESC" } else { "ASC" };
-            format!("ORDER BY [{}] {}", col, dir)
+            format!("ORDER BY {} {}", quote_ident(&ENGINE, col), dir)
         } else {
             // MSSQL requires ORDER BY for OFFSET/FETCH
             "ORDER BY (SELECT NULL)".to_string()
@@ -530,8 +578,14 @@ impl DbConnection for MssqlDriver {
         table: &str,
         where_clause: Option<&str>,
     ) -> Result<i64, CoreError> {
+        validate_where_clause(where_clause.unwrap_or(""), &ENGINE)?;
+
         let schema = schema.unwrap_or("dbo");
-        let qualified = format!("[{}].[{}]", schema, table);
+        let qualified = format!(
+            "{}.{}",
+            quote_ident(&ENGINE, schema),
+            quote_ident(&ENGINE, table)
+        );
         let where_str = where_clause
             .filter(|s| !s.trim().is_empty())
             .map(|s| format!("WHERE {}", s))

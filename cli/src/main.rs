@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use dbkonn_core::connection::{ConnectionConfig, DbEngine};
+use dbkonn_core::{quote_ident, quote_literal};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -106,11 +107,15 @@ fn backup(mut config: ConnectionConfig, out: &PathBuf) -> Result<()> {
             cmd.arg("-h").arg(config.host.as_deref().unwrap_or("localhost"))
                .arg("-P").arg(config.port.unwrap_or(3306).to_string())
                .arg("-u").arg(config.username.as_deref().unwrap_or("root"));
+            // Pass the password via the environment, not `-p<pw>` on the
+            // command line where it is visible to every local process via
+            // `ps` / `/proc`.
             if let Some(pw) = &config.password {
-                cmd.arg(format!("-p{}", pw));
+                cmd.env("MYSQL_PWD", pw);
             }
-            cmd.arg(config.database.as_deref().unwrap_or(""))
-               .arg("--result-file").arg(out);
+            cmd.arg("--single-transaction")
+               .arg("--result-file").arg(out)
+               .arg(config.database.as_deref().unwrap_or(""));
             run_cmd(cmd, "mysqldump")?;
         }
         DbEngine::SQLite => {
@@ -125,15 +130,20 @@ fn backup(mut config: ConnectionConfig, out: &PathBuf) -> Result<()> {
             let port = config.port.unwrap_or(1433);
             let db = config.database.as_deref().unwrap_or("master");
             let out_str = out.to_string_lossy();
-            let sql = format!("BACKUP DATABASE [{}] TO DISK = N'{}' WITH FORMAT, INIT", db, out_str);
+            let sql = format!(
+                "BACKUP DATABASE {} TO DISK = N{} WITH FORMAT, INIT",
+                quote_ident(&DbEngine::MSSQL, db),
+                quote_literal(&DbEngine::MSSQL, &out_str)
+            );
             let mut cmd = Command::new("sqlcmd");
-            cmd.arg("-S").arg(format!("{}:{}", host, port))
+            cmd.arg("-S").arg(format!("{},{}", host, port))
                .arg("-Q").arg(&sql);
             if let Some(u) = &config.username {
                 cmd.arg("-U").arg(u);
             }
+            // Password via env, not `-P <pw>` on the command line.
             if let Some(p) = &config.password {
-                cmd.arg("-P").arg(p);
+                cmd.env("SQLCMDPASSWORD", p);
             }
             run_cmd(cmd, "sqlcmd BACKUP DATABASE")?;
         }
@@ -163,11 +173,16 @@ fn restore(mut config: ConnectionConfig, input: &PathBuf) -> Result<()> {
             cmd.arg("-h").arg(config.host.as_deref().unwrap_or("localhost"))
                .arg("-P").arg(config.port.unwrap_or(3306).to_string())
                .arg("-u").arg(config.username.as_deref().unwrap_or("root"));
+            // Password via env, not argv (see backup()).
             if let Some(pw) = &config.password {
-                cmd.arg(format!("-p{}", pw));
+                cmd.env("MYSQL_PWD", pw);
             }
-            cmd.arg(config.database.as_deref().unwrap_or(""))
-               .arg("<").arg(input);
+            cmd.arg(config.database.as_deref().unwrap_or(""));
+            // `Command` does not run a shell, so `.arg("<")` never redirected
+            // anything — feed the dump file on stdin instead.
+            let dump = std::fs::File::open(input)
+                .with_context(|| format!("Opening dump file {}", input.display()))?;
+            cmd.stdin(dump);
             run_cmd(cmd, "mysql restore")?;
         }
         DbEngine::SQLite => {
@@ -182,17 +197,19 @@ fn restore(mut config: ConnectionConfig, input: &PathBuf) -> Result<()> {
             let db = config.database.as_deref().unwrap_or("master");
             let in_str = input.to_string_lossy();
             let sql = format!(
-                "RESTORE DATABASE [{}] FROM DISK = N'{}' WITH REPLACE",
-                db, in_str
+                "RESTORE DATABASE {} FROM DISK = N{} WITH REPLACE",
+                quote_ident(&DbEngine::MSSQL, db),
+                quote_literal(&DbEngine::MSSQL, &in_str)
             );
             let mut cmd = Command::new("sqlcmd");
-            cmd.arg("-S").arg(format!("{}:{}", host, port))
+            cmd.arg("-S").arg(format!("{},{}", host, port))
                .arg("-Q").arg(&sql);
             if let Some(u) = &config.username {
                 cmd.arg("-U").arg(u);
             }
+            // Password via env, not `-P <pw>` on the command line.
             if let Some(p) = &config.password {
-                cmd.arg("-P").arg(p);
+                cmd.env("SQLCMDPASSWORD", p);
             }
             run_cmd(cmd, "sqlcmd RESTORE DATABASE")?;
         }

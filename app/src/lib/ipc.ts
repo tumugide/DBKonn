@@ -78,7 +78,6 @@ export const ipc = {
   connectDb:           (config: ConnectionConfig)                               => invoke<string>("connect_db", { config }),
   disconnectDb:        (connId: string)                                         => invoke<void>("disconnect_db", { connId }),
   testConnection:      (config: ConnectionConfig)                               => invoke<boolean>("test_connection", { config }),
-  getActiveConnections:()                                                       => invoke<string[]>("get_active_connections"),
 
   listDatabases:       (connId: string)                                         => invoke<string[]>("list_databases", { connId }),
   createDatabase:      (connId: string, name: string)                           => invoke<void>("create_database", { connId, name }),

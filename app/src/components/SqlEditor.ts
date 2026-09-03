@@ -444,6 +444,7 @@ export class SqlEditor {
   private resultContainer!: HTMLElement;
   private statusEl!: HTMLElement;
   private errorEl!: HTMLElement;
+  private warnEl!: HTMLElement;
   private lastDoc = "SELECT 1;\n";
   private lastResult: QueryResult | null = null;
   private lastRunText = "";
@@ -512,6 +513,13 @@ export class SqlEditor {
     toolbar.appendChild(this.statusEl);
     toolbar.appendChild(this.exportButton.element);
 
+    // Advisory validation warning (dismissible) — shown when the local
+    // parser dislikes the SQL, but the query still runs (the parser's
+    // dialect coverage is incomplete: DO $$, COPY, vendor syntax, …).
+    this.warnEl = document.createElement("div");
+    this.warnEl.className = "warn-banner";
+    this.warnEl.style.display = "none";
+
     // Error banner
     this.errorEl = document.createElement("div");
     this.errorEl.className = "error-banner";
@@ -533,6 +541,7 @@ export class SqlEditor {
 
     this.container.appendChild(toolbar);
     this.container.appendChild(editorPane);
+    this.container.appendChild(this.warnEl);
     this.container.appendChild(this.errorEl);
     this.container.appendChild(this.resultContainer);
 
@@ -652,19 +661,28 @@ export class SqlEditor {
     if (!sqlText.trim()) return;
 
     this.errorEl.style.display = "none";
+    this.clearWarning();
     this.setStatus("Validating…");
 
     try {
       const parseErr = await ipc.validateSql(this.config, sqlText);
       if (parseErr) {
-        this.setError(`Parse error: ${parseErr.message}`);
-        return;
+        // Advisory only — the local parser doesn't cover every dialect
+        // construct, so a "parse error" here is often a false positive.
+        // Surface it and keep going; a genuine problem shows up as a DB
+        // error below.
+        const where =
+          parseErr.line != null
+            ? ` (line ${parseErr.line}${parseErr.col != null ? `, col ${parseErr.col}` : ""})`
+            : "";
+        this.setWarning(`Possible syntax issue${where}: ${parseErr.message}`);
       }
     } catch {
       /* validation is best-effort */
     }
 
     this.setStatus("Running…");
+    this.grid?.setLoading(true);
 
     try {
       const result = await ipc.executeQuery(this.connId, sqlText);
@@ -687,6 +705,8 @@ export class SqlEditor {
     } catch (e) {
       this.setError(String(e));
       this.exportButton?.setDisabled(!this.hasExportableResult());
+    } finally {
+      this.grid?.setLoading(false);
     }
   }
 
@@ -704,6 +724,7 @@ export class SqlEditor {
         result.rows,
         `query_result.${formatMeta[format].ext}`,
         "query_result",
+        this.config?.engine ?? "postgres",
       );
     } catch (e) {
       alert(`Export failed: ${e}`);
@@ -728,5 +749,23 @@ export class SqlEditor {
     this.errorEl.textContent = msg;
     this.errorEl.style.display = "";
     this.setStatus("Error");
+  }
+
+  private setWarning(msg: string) {
+    this.warnEl.textContent = "";
+    const text = document.createElement("span");
+    text.textContent = msg;
+    const dismiss = document.createElement("button");
+    dismiss.className = "warn-banner-dismiss";
+    dismiss.textContent = "✕";
+    dismiss.title = "Dismiss";
+    dismiss.onclick = () => this.clearWarning();
+    this.warnEl.append(text, dismiss);
+    this.warnEl.style.display = "";
+  }
+
+  private clearWarning() {
+    this.warnEl.textContent = "";
+    this.warnEl.style.display = "none";
   }
 }

@@ -54,6 +54,19 @@ export function createExportButton(opts: ExportButtonOptions): ExportButton {
       menu.appendChild(item);
     }
     wrapper.appendChild(menu);
+
+    // Keep the dropdown inside the viewport (it's absolutely positioned to
+    // the wrapper, which can sit near the right/bottom edge of a toolbar).
+    const r = menu.getBoundingClientRect();
+    if (r.right > window.innerWidth - 4) {
+      menu.style.left = "auto";
+      menu.style.right = "0";
+    }
+    if (r.bottom > window.innerHeight - 4) {
+      menu.style.top = "auto";
+      menu.style.bottom = "100%";
+    }
+
     document.addEventListener("mousedown", onOutsideClick, true);
     document.addEventListener("keydown", onKeyDown, true);
   }

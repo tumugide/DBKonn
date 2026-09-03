@@ -1,8 +1,14 @@
 use dbkonn_core::connection::ConnectionConfig;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
 
 const KEYCHAIN_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Serializes concurrent writers to `connections.json`. Two `save`/`delete`
+/// commands racing previously did read-modify-write with no coordination, so
+/// the slower one clobbered the faster one's change (last-writer-wins).
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn config_dir() -> PathBuf {
     dirs::data_dir()
@@ -14,22 +20,43 @@ pub fn connections_path() -> PathBuf {
     config_dir().join("connections.json")
 }
 
-pub fn load_connections() -> Vec<ConnectionConfig> {
+pub fn load_connections() -> Result<Vec<ConnectionConfig>, String> {
     let path = connections_path();
     if !path.exists() {
-        return vec![];
+        return Ok(vec![]);
     }
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Reading {}: {}", path.display(), e))?;
+    // A parse failure used to be swallowed (`unwrap_or_default()`) — a single
+    // truncated write then made *every* saved connection silently disappear.
+    // Surface it instead so the user knows the file needs attention rather
+    // than assuming they have no connections.
+    serde_json::from_str(&raw).map_err(|e| {
+        format!(
+            "{} is corrupt ({}). It has not been modified; fix or remove it to recover your connections.",
+            path.display(),
+            e
+        )
+    })
 }
 
 pub fn save_connections(conns: &[ConnectionConfig]) -> Result<(), String> {
+    let _guard = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     let dir = config_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(conns).map_err(|e| e.to_string())?;
-    std::fs::write(connections_path(), json).map_err(|e| e.to_string())?;
+
+    // Write to a temp file in the same directory, then atomically rename over
+    // the real one — a crash or power loss mid-write leaves the previous
+    // good file intact instead of a half-written, unparseable one.
+    let final_path = connections_path();
+    let tmp_path = dir.join("connections.json.tmp");
+    std::fs::write(&tmp_path, json.as_bytes()).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp_path, &final_path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        e.to_string()
+    })?;
     Ok(())
 }
 

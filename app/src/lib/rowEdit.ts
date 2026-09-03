@@ -25,6 +25,19 @@ function qualifyTable(
   }
 }
 
+/** Render a JS array as a Postgres array literal (`'{a,b,c}'`). */
+function pgArrayLiteral(arr: unknown[]): string {
+  const elems = arr.map((el) => {
+    if (el === null || el === undefined) return "NULL";
+    if (typeof el === "number" || typeof el === "boolean") return String(el);
+    // Quote every string element and escape `"` / `\` inside it — an
+    // unquoted element containing a comma or brace would corrupt the literal.
+    const s = String(el).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    return `"${s}"`;
+  });
+  return `'{${elems.join(",")}}'`;
+}
+
 function formatSqlValue(engine: DbEngine, val: RowValue): string {
   if (val === SQL_NOW_SENTINEL) return sqlNowExpression(engine);
   if (val === null || val === undefined) return "NULL";
@@ -34,13 +47,41 @@ function formatSqlValue(engine: DbEngine, val: RowValue): string {
   }
   if (typeof val === "number") return String(val);
   if (typeof val === "string") {
-    if (val.startsWith("0x")) return val;
-    return quoteValue(val);
+    // Always quote. A previous `0x…` fast-path emitted the value into SQL
+    // unquoted, which is an injection sink for any text column holding a
+    // value that happens to start with "0x". Binary/BLOB columns can't be
+    // round-tripped through the driver's truncated hex preview anyway;
+    // proper binary editing is tracked separately.
+    return quoteValue(engine, val);
+  }
+  if (Array.isArray(val)) {
+    // A pg array column round-trips as a JSON array; writing it back as
+    // `'["a","b"]'` (JSON text) is a type error / wrong value. Emit a real
+    // pg array literal instead. Other engines have no array type — fall back
+    // to JSON text.
+    return engine === "postgres"
+      ? pgArrayLiteral(val)
+      : quoteValue(engine, JSON.stringify(val));
   }
   if (typeof val === "object") {
-    return quoteValue(JSON.stringify(val));
+    return quoteValue(engine, JSON.stringify(val));
   }
-  return quoteValue(String(val));
+  return quoteValue(engine, String(val));
+}
+
+/** True for column types that can meaningfully hold an empty string. Used to
+ *  stop an un-nulled numeric/date/json field from being written as `''`. */
+export function isTextLikeType(dataType: string | undefined): boolean {
+  if (!dataType) return true; // unknown → treat as text, the safe default
+  const t = dataType.toLowerCase();
+  if (/\b(char|varchar|character|text|string|clob|citext|name|bpchar|xml|enum|uuid)\b/.test(t)) {
+    return true;
+  }
+  return /(int|serial|numeric|decimal|real|double|float|money|bool|bit|date|time|timestamp|json|bytea|blob|binary|array)/.test(
+    t,
+  )
+    ? false
+    : true;
 }
 
 function valuesEqual(a: RowValue, b: RowValue): boolean {

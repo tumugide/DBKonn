@@ -25,6 +25,11 @@ export class Signal<T> {
   }
 
   set(val: T) {
+    // Skip a no-op set (common for the primitive signals — status, theme,
+    // activeTab, activeConnId — which re-fire subscribers, and their IPC,
+    // on every write). Object signals always get a fresh reference from
+    // their callers, so this never suppresses a real change there.
+    if (Object.is(this._val, val)) return;
     this._val = val;
     this._listeners.forEach((l) => l(val));
   }

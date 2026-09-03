@@ -463,10 +463,18 @@ body {
 .sidebar-header.connected {
     border-left-color: var(--conn-color, transparent);
 }
+.sidebar-header-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .sidebar-header-actions {
     display: flex;
     align-items: center;
     gap: 2px;
+    flex-shrink: 0;
 }
 
 /* ── Icon buttons ────────────────────────────────────────────────────────── */
@@ -617,9 +625,32 @@ body {
     text-overflow: ellipsis;
     border-radius: var(--radius);
 }
+.tree-item-icon {
+    flex-shrink: 0;
+    color: var(--text-faint);
+    font-size: 11px;
+    width: 12px;
+    text-align: center;
+}
+.tree-item-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.tree-item-count {
+    flex-shrink: 0;
+    font-size: 10.5px;
+    color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
+}
 .tree-item:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+}
+.tree-item.active .tree-item-icon,
+.tree-item:hover .tree-item-icon {
+    color: var(--text-muted);
 }
 .tree-item.active {
     color: var(--text-primary);
@@ -741,6 +772,33 @@ body {
 .grid-scroll {
     flex: 1;
     overflow: auto;
+}
+.grid-scroll:focus {
+    outline: none;
+}
+.grid-scroll:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+}
+
+/* ── Grid loading overlay ────────────────────────────────────────────────── */
+.grid-loading-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--bg-base) 55%, transparent);
+    backdrop-filter: blur(1px);
+}
+.grid-spinner {
+    width: 22px;
+    height: 22px;
+    border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: dbkonn-spin 0.7s linear infinite;
 }
 
 /* ── Multi-row selection bulk-action bar ─────────────────────────────────── */
@@ -1166,6 +1224,61 @@ label {
     border-top: 1px solid var(--border);
     background: var(--bg-overlay);
 }
+.modal-wide {
+    max-width: 760px;
+}
+
+/* ── Structure modal (columns + indexes) ────────────────────────────────── */
+.structure-body {
+    max-height: 65vh;
+    overflow-y: auto;
+    padding-bottom: 14px;
+}
+.structure-heading {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 14px 0 6px;
+}
+.structure-heading:first-child {
+    margin-top: 0;
+}
+.structure-heading span {
+    color: var(--text-muted);
+    font-weight: 400;
+}
+.structure-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11.5px;
+    font-family: var(--font-mono);
+}
+.structure-table th,
+.structure-table td {
+    text-align: left;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+.structure-table th {
+    color: var(--text-muted);
+    font-weight: 600;
+}
+.structure-badge {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    color: var(--accent);
+    vertical-align: middle;
+}
+.structure-empty {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    margin: 4px 0 8px;
+}
 
 /* ── Status bar ──────────────────────────────────────────────────────────── */
 .status-bar {
@@ -1238,6 +1351,35 @@ label {
     white-space: pre-wrap;
     word-break: break-all;
     margin: 6px 10px;
+}
+.warn-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    background: color-mix(in srgb, var(--accent-amber) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-amber) 45%, transparent);
+    border-radius: var(--radius);
+    color: var(--accent-amber);
+    padding: 7px 10px;
+    font-size: 11.5px;
+    font-family: var(--font-family);
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 6px 10px;
+}
+.warn-banner-dismiss {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1;
+    padding: 1px 3px;
+    opacity: 0.7;
+}
+.warn-banner-dismiss:hover {
+    opacity: 1;
 }
 
 /* ── Connection card (connections view) ──────────────────────────────────── */
@@ -1376,6 +1518,17 @@ label {
 }
 .record-panel-error {
     margin: 6px 10px 0;
+    flex-shrink: 0;
+}
+.record-panel-note {
+    margin: 6px 10px 0;
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-muted);
+    background: var(--bg-overlay);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
     flex-shrink: 0;
 }
 .record-panel-fields {
