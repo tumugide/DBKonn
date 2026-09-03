@@ -463,6 +463,11 @@ body {
 .sidebar-header.connected {
     border-left-color: var(--conn-color, transparent);
 }
+.sidebar-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
 
 /* ── Icon buttons ────────────────────────────────────────────────────────── */
 .btn-icon {

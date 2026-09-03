@@ -191,7 +191,10 @@ function renderSidebar() {
     buf.push(`
       <div class="sidebar-header connected" style="--conn-color:${ac.config.color ?? avatarColor(ac.config.id)}">
         <span>${esc(ac.config.name)}</span>
-        <button class="btn-icon danger" id="sb-disconnect" title="Disconnect">Quit</button>
+        <div class="sidebar-header-actions">
+          <button class="btn-icon" id="sb-refresh-tree" title="Refresh database (schemas & tables)">⟳</button>
+          <button class="btn-icon danger" id="sb-disconnect" title="Disconnect">Quit</button>
+        </div>
       </div>
       <div class="db-controls">
     `);
@@ -235,7 +238,6 @@ function renderSidebar() {
     buf.push(`
       <div class="tree-header">
         <span>Tables <span class="tree-count" id="sb-tree-count">${ac.tables.length}</span></span>
-        <button class="btn-icon" id="sb-refresh-tree" title="Refresh schema">⟳</button>
       </div>
       <div style="flex:1;overflow-y:auto;" id="sb-table-tree"></div>
     `);
