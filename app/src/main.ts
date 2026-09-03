@@ -327,10 +327,23 @@ function compactCount(n: number | undefined): string {
   return `${(n / 1_000_000_000).toFixed(1)}B`;
 }
 
-// Rebuilds just the table-list container and its click listeners, without
-// touching the DB/schema dropdowns — used by both the initial renderSidebar()
-// build and refreshSchemaTree(), so there's one source of truth for the
-// tree-item markup/binding.
+// Identity of the currently-rendered table list, so a background refresh that
+// returns the same tables can skip the DOM rebuild entirely (see below).
+function tableListSignature(ac: ConnSession): string {
+  return ac.tables
+    .map((t) => `${t.name} ${t.table_type ?? ""} ${t.row_count_estimate ?? ""}`)
+    .join("");
+}
+
+// Rebuilds just the table-list container, without touching the DB/schema
+// dropdowns — used by both the initial renderSidebar() build and
+// refreshSchemaTree(), so there's one source of truth for the tree-item markup.
+//
+// The rebuild is skipped when the table list is unchanged. The 30s background
+// refresh used to blow away and recreate every row unconditionally, which
+// reset the tree's scroll position to the top and reflowed the list under a
+// stationary pointer — so a click landed on whatever table had shifted under
+// the cursor and opened it as a brand-new tab, over and over.
 function renderTableTree(ac: ConnSession) {
   const countEl = document.getElementById("sb-tree-count");
   if (countEl) countEl.textContent = String(ac.tables.length);
@@ -338,6 +351,25 @@ function renderTableTree(ac: ConnSession) {
   const treeEl = document.getElementById("sb-table-tree");
   if (!treeEl) return;
 
+  // Click handling is delegated to the container and bound once, so rebuilding
+  // rows never re-attaches (or orphans) per-row listeners.
+  if (!treeEl.dataset["delegated"]) {
+    treeEl.dataset["delegated"] = "1";
+    treeEl.addEventListener("click", (e) => {
+      const item = (e.target as HTMLElement | null)?.closest<HTMLElement>(".tree-item");
+      const tableName = item?.dataset["table"];
+      if (!tableName) return;
+      openOrCreateTableTab(tableName, appState.activeConn.value?.selectedSchema);
+    });
+  }
+
+  const signature = tableListSignature(ac);
+  if (treeEl.dataset["signature"] === signature && treeEl.childElementCount > 0) {
+    updateTreeActiveState();
+    return;
+  }
+
+  const prevScroll = treeEl.scrollTop;
   treeEl.innerHTML = ac.tables
     .map((t) => {
       const active = t.name === ac.selectedTable ? " active" : "";
@@ -350,13 +382,8 @@ function renderTableTree(ac: ConnSession) {
       </div>`;
     })
     .join("");
-
-  treeEl.querySelectorAll(".tree-item").forEach((el) => {
-    el.addEventListener("click", () => {
-      const tableName = (el as HTMLElement).dataset["table"]!;
-      openOrCreateTableTab(tableName, ac.selectedSchema);
-    });
-  });
+  treeEl.dataset["signature"] = signature;
+  treeEl.scrollTop = prevScroll;
 }
 
 function renderConnList() {
@@ -1233,8 +1260,14 @@ function renderTableTabContent(_tab: TableTab) {
     const reqId = ++tableDataRequestSeq;
     const reqConnId = ac2.connId;
     const reqTable = ac2.selectedTable;
+    // Ownership of the loading overlay: whichever call is the most recent one
+    // must always clear it, even if it declined to paint. This is deliberately
+    // NOT the same test as isCurrent() — tying the overlay to the conn/table
+    // match meant a request whose table drifted mid-fetch bailed out without
+    // ever turning the spinner off, leaving it stuck on top of good rows.
+    const isLatest = () => reqId === tableDataRequestSeq;
     const isCurrent = () => {
-      if (reqId !== tableDataRequestSeq) return false;
+      if (!isLatest()) return false;
       const now = appState.activeConn.value;
       return !!now && now.connId === reqConnId && now.selectedTable === reqTable;
     };
@@ -1304,7 +1337,10 @@ function renderTableTabContent(_tab: TableTab) {
     } catch (e) {
       rowInfo.textContent = `Error: ${e}`;
     } finally {
-      if (isCurrent()) {
+      // isLatest, not isCurrent — see the comment where they're defined. A
+      // superseded request leaves the overlay to its successor; the newest
+      // one always clears it, so the spinner can never be left stuck.
+      if (isLatest()) {
         dataGrid?.setLoading(false);
         appState.tableState.set({ ...appState.tableState.value, loading: false });
       }
@@ -1738,7 +1774,23 @@ function focusSession(session: ConnSession) {
 function activateFocusedSession(session: ConnSession) {
   if (session.openTabs.length > 0) {
     const activeTabObj = session.openTabs.find((t) => t.id === session.activeTabId);
-    if (activeTabObj?.kind === "table") loadTableTabIntoSignals(activeTabObj);
+    if (activeTabObj?.kind === "table") {
+      loadTableTabIntoSignals(activeTabObj);
+      // renderTableTabContent reads the table to show from
+      // activeConn.selectedTable, not from the tab — point it at the tab
+      // being activated. Without this a restored table tab came back blank
+      // (selectedTable is undefined on a freshly established session) until
+      // the user clicked it in the tab strip.
+      const ac = appState.activeConn.value;
+      if (ac) {
+        appState.activeConn.set({
+          ...ac,
+          selectedTable: activeTabObj.name,
+          selectedSchema: activeTabObj.schema ?? ac.selectedSchema,
+          selectedDatabase: activeTabObj.database ?? ac.selectedDatabase,
+        });
+      }
+    }
     tabStripEl.style.display = "";
     renderTabStrip();
     renderActiveTabContent();
@@ -2089,14 +2141,22 @@ function openOrCreateTableTab(tableName: string, schema?: string, database?: str
   const ac = appState.activeConn.value;
   if (!ac) return;
 
-  const existing = appState.openTabs.value.find(
-    (t): t is TableTab =>
-      t.kind === "table" &&
-      t.connId === ac.connId &&
-      t.name === tableName &&
-      (t.schema ?? undefined) === (schema ?? undefined) &&
-      (t.database ?? undefined) === (database ?? undefined),
+  const tableTabs = appState.openTabs.value.filter(
+    (t): t is TableTab => t.kind === "table" && t.connId === ac.connId && t.name === tableName,
   );
+
+  const existing =
+    tableTabs.find(
+      (t) =>
+        (t.schema ?? undefined) === (schema ?? undefined) &&
+        (t.database ?? undefined) === (database ?? undefined),
+    ) ??
+    // Fall back to any tab for this table on this connection. Opening a table
+    // from the sidebar should focus the tab that's already showing it; a
+    // schema/database field that drifted (e.g. a restored tab recorded before
+    // the schema was resolved) shouldn't spawn a duplicate. Deliberate
+    // duplicates still go through openTableInNewTab directly.
+    tableTabs[0];
 
   if (existing) {
     switchToTab(existing.id);
