@@ -1,6 +1,7 @@
 import type { ColumnInfo, DbEngine, RowValue } from "../lib/ipc";
 import type { SelectedRecord } from "../lib/store";
 import {
+  buildDeleteSql,
   buildUpdateSql,
   cloneRowValue,
   isTextLikeType,
@@ -31,6 +32,8 @@ export interface RecordPanelOptions {
   database?: string;
   table: string;
   onCommit: (sql: string) => Promise<void>;
+  /** Delete this row. When provided, the panel shows a Delete button. */
+  onDelete?: (sql: string) => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
   onClose: () => void;
   /** View-only mode: no editing, no NULL toggle, no Save/Revert toolbar. */
@@ -243,6 +246,7 @@ export class RecordPanel {
           : `<div class="record-panel-toolbar">
         <button class="btn btn-primary" id="rp-commit" ${dirty ? "" : "disabled"}>Save</button>
         <button class="btn btn-secondary" id="rp-rollback" ${dirty ? "" : "disabled"}>Revert</button>
+        ${this.opts.onDelete ? '<button class="btn btn-danger" id="rp-delete" style="margin-left:auto">Delete</button>' : ""}
       </div>`
       }
       ${
@@ -280,6 +284,10 @@ export class RecordPanel {
 
     document.getElementById("rp-rollback")?.addEventListener("click", () => {
       this.handleRollback();
+    });
+
+    document.getElementById("rp-delete")?.addEventListener("click", () => {
+      void this.handleDelete();
     });
 
     this.container.querySelectorAll(".record-field-input").forEach((el) => {
@@ -458,6 +466,33 @@ export class RecordPanel {
       );
     } else if (!dirty && badge) {
       badge.remove();
+    }
+  }
+
+  private async handleDelete() {
+    if (!this.record || !this.opts.onDelete) return;
+    if (!confirm("Delete this row? This cannot be undone.")) return;
+
+    const result = buildDeleteSql({
+      engine: this.opts.engine,
+      schema: this.opts.schema,
+      database: this.opts.database,
+      table: this.opts.table,
+      columns: this.columns,
+      rows: [this.record.original],
+    });
+    if ("error" in result) {
+      this.errorMsg = result.error;
+      this.render();
+      return;
+    }
+
+    try {
+      await this.opts.onDelete(result.sql);
+      // onDelete is expected to close the panel / reload the grid.
+    } catch (e) {
+      this.errorMsg = String(e);
+      this.render();
     }
   }
 

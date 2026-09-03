@@ -1116,6 +1116,20 @@ function renderTableTabContent(_tab: TableTab) {
       }
       await loadTableData();
     },
+    onDelete: async (sql) => {
+      const ac2 = appState.activeConn.value;
+      if (!ac2) return;
+      const result = await ipc.executeQuery(ac2.connId, sql);
+      if (result.error) throw new Error(result.error);
+      if (result.affected_rows === 0) {
+        throw new Error(
+          "No rows were deleted — this row may already be gone, or the table has no key to match it.",
+        );
+      }
+      appState.status.set(`Deleted 1 row · ${result.execution_time_ms}ms`);
+      clearRecordSelection();
+      await loadTableData();
+    },
     onClose: () => clearRecordSelection(),
   });
   recordPanel.setColumns(appState.tableMetadata.value);
