@@ -17,6 +17,7 @@ import {
   toDateTimeLocalValue,
   toTimeInputValue,
 } from "../lib/temporal";
+import { escapeHtml as esc } from "../lib/escape";
 
 /** True when a column's declared type is boolean-ish, regardless of the
  *  current cell value (which is `null` for a NULL boolean, so `typeof val`
@@ -46,14 +47,6 @@ function formatDisplayValue(val: RowValue): string {
   if (val === null || val === undefined) return "";
   if (typeof val === "object") return JSON.stringify(val, null, 2);
   return String(val);
-}
-
-function esc(s: string): string {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 function enumOptions(col: ColumnInfo, val: RowValue): string {

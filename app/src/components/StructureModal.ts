@@ -1,13 +1,6 @@
 import type { ColumnInfo, IndexInfo } from "../lib/ipc";
 import { wireModalDismissal } from "../lib/modal";
-
-function esc(s: unknown): string {
-  return String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+import { escapeHtml as esc } from "../lib/escape";
 
 function columnsTable(columns: ColumnInfo[]): string {
   if (columns.length === 0) return `<p class="structure-empty">No columns.</p>`;

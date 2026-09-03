@@ -18,6 +18,8 @@ import { RecordPanel } from "./components/RecordPanel";
 import { showConnectionModal } from "./components/ConnectionModal";
 import { showCreateDatabaseModal } from "./components/CreateDatabaseModal";
 import { showStructureModal } from "./components/StructureModal";
+import { escapeHtml as esc } from "./lib/escape";
+import { wireModalDismissal } from "./lib/modal";
 import { createExportButton } from "./components/ExportMenu";
 import { showContextMenu } from "./components/ContextMenu";
 import { cloneRowValue, buildDeleteSql } from "./lib/rowEdit";
@@ -91,9 +93,7 @@ function showAppearanceModal() {
   });
 
   overlay.querySelector("#am-close")!.addEventListener("click", () => overlay.remove());
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) overlay.remove();
-  });
+  wireModalDismissal(overlay, () => overlay.remove());
 }
 
 // ── App Shell ─────────────────────────────────────────────────────────────────
@@ -2325,14 +2325,6 @@ function openQueryTab() {
   persistSessionNow();
 }
 
-// ── Utils ─────────────────────────────────────────────────────────────────────
-function esc(s: string): string {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 // Best-effort detection of "this query is really just browsing one table",
 // so the read-only query-result panel can offer in-place editing. Bails out

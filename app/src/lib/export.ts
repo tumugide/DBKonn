@@ -3,6 +3,7 @@ import { writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import writeExcelFile from "write-excel-file/universal";
 
 import type { ColumnInfo, RowValue } from "./ipc";
+import { escapeHtml } from "./escape";
 
 export type ExportFormat = "csv" | "tsv" | "xlsx" | "json" | "markdown" | "html" | "sql";
 
@@ -68,13 +69,6 @@ export function toMarkdown(columns: ColumnInfo[], rows: RowValue[][]): string {
     (row) => `| ${row.map((v) => escapeMarkdownCell(cellText(v))).join(" | ")} |`,
   );
   return [header, separator, ...body].join("\n");
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }
 
 export function toHtml(columns: ColumnInfo[], rows: RowValue[][], tableName: string): string {
