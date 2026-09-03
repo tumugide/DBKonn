@@ -3,9 +3,11 @@ import type { SelectedRecord } from "../lib/store";
 import {
   buildUpdateSql,
   cloneRowValue,
+  isTextLikeType,
   parseFieldInput,
 } from "../lib/rowEdit";
 import {
+  extractTimezoneSuffix,
   fromDateTimeLocalValue,
   getTemporalKind,
   isNowValue,
@@ -14,6 +16,13 @@ import {
   toDateTimeLocalValue,
   toTimeInputValue,
 } from "../lib/temporal";
+
+/** True when a column's declared type is boolean-ish, regardless of the
+ *  current cell value (which is `null` for a NULL boolean, so `typeof val`
+ *  alone would mis-render it as a free-text box → saves the string 'true'). */
+function isBooleanColumn(col: ColumnInfo): boolean {
+  return /^(bool|boolean|bit|tinyint\(1\))$/i.test(col.data_type.trim());
+}
 
 export interface RecordPanelOptions {
   container: HTMLElement;
@@ -171,11 +180,11 @@ export class RecordPanel {
               step="1"
               value="${esc(toTimeInputValue(val))}"
               ${disabled ? "disabled" : ""} />`;
-        } else if (typeof val === "boolean") {
+        } else if (isBooleanColumn(col) || typeof val === "boolean") {
           inputHtml = `
-            <select class="record-field-input" data-idx="${idx}" data-kind="boolean" ${ro || isPk ? "disabled" : ""}>
-              <option value="true" ${val ? "selected" : ""}>true</option>
-              <option value="false" ${!val ? "selected" : ""}>false</option>
+            <select class="record-field-input" data-idx="${idx}" data-kind="boolean" ${disabled ? "disabled" : ""}>
+              <option value="true" ${val === true ? "selected" : ""}>true</option>
+              <option value="false" ${val === false ? "selected" : ""}>false</option>
             </select>`;
         } else if (typeof val === "number") {
           inputHtml = `
@@ -236,6 +245,11 @@ export class RecordPanel {
         <button class="btn btn-secondary" id="rp-rollback" ${dirty ? "" : "disabled"}>Revert</button>
       </div>`
       }
+      ${
+        !ro && this.columns.length > 0 && !this.columns.some((c) => c.is_primary_key)
+          ? `<div class="record-panel-note">No primary key on this table — edits match rows on every column value, so a save can miss (if a value changed underneath) or touch more than one row.</div>`
+          : ""
+      }
       ${this.errorMsg ? `<div class="error-banner record-panel-error">${esc(this.errorMsg)}</div>` : ""}
       <div class="record-panel-fields">${fields}</div>
     `;
@@ -269,12 +283,12 @@ export class RecordPanel {
     });
 
     this.container.querySelectorAll(".record-field-input").forEach((el) => {
-      el.addEventListener("input", () => {
+      const idx = Number((el as HTMLElement).dataset["idx"]);
+      const onEdit = () => {
         if (
           el instanceof HTMLInputElement &&
           el.dataset["kind"] === "datetime"
         ) {
-          const idx = el.dataset["idx"];
           const nowBtn = this.container.querySelector<HTMLButtonElement>(
             `.record-now-btn[data-idx="${idx}"]`,
           );
@@ -284,9 +298,10 @@ export class RecordPanel {
           }
         }
         if (el instanceof HTMLTextAreaElement) this.autoGrow(el);
-        this.syncDraftFromDom();
-      });
-      el.addEventListener("change", () => this.syncDraftFromDom());
+        this.syncDraftFromDom(idx);
+      };
+      el.addEventListener("input", onEdit);
+      el.addEventListener("change", onEdit);
     });
 
     // Size textareas to their content on render
@@ -296,7 +311,7 @@ export class RecordPanel {
 
     this.container.querySelectorAll(".record-null-toggle").forEach((el) => {
       el.addEventListener("change", () => {
-        this.syncDraftFromDom();
+        this.syncDraftFromDom(Number((el as HTMLElement).dataset["idx"]));
         this.render();
       });
     });
@@ -312,25 +327,56 @@ export class RecordPanel {
         const activating = !btn.classList.contains("active");
         btn.classList.toggle("active", activating);
         if (input) input.disabled = activating;
-        this.syncDraftFromDom();
+        this.syncDraftFromDom(Number(idx));
         this.render();
       });
     });
   }
 
-  private syncDraftFromDom() {
+  // Re-reads the given field (or every field when `changedIdx` is omitted)
+  // from the DOM into the draft. Crucially it starts from the *current*
+  // draft, not `original` — rebuilding every field on each keystroke was
+  // reformatting untouched timestamp columns through the local timezone and
+  // silently marking them "Modified" with a shifted value (A9).
+  // `parseFieldInput`, but never yields "" for a non-text column. Un-checking
+  // NULL re-renders the field with an empty value; writing that back as
+  // `col = ''` is a type error on pg/mssql and a silent 0 / epoch elsewhere
+  // (A15). Keep the field at its previous value until the user types a real
+  // one — Save stays disabled because nothing actually changed.
+  private parseNonTextGuarded(
+    raw: string,
+    isNull: boolean,
+    original: RowValue,
+    col: ColumnInfo,
+  ): RowValue {
+    const parsed = parseFieldInput(raw, isNull, original);
+    if (!isNull && raw === "" && parsed === "" && !isTextLikeType(col.data_type)) {
+      return original ?? null;
+    }
+    return parsed;
+  }
+
+  private syncDraftFromDom(changedIdx?: number) {
     if (!this.record) return;
 
-    const draft = this.record.original.map((v) => cloneRowValue(v));
-    this.columns.forEach((col, idx) => {
+    const draft = this.record.draft.map((v) => cloneRowValue(v));
+    const indices =
+      changedIdx !== undefined && changedIdx >= 0
+        ? [changedIdx]
+        : this.columns.map((_, i) => i);
+
+    for (const idx of indices) {
+      const col = this.columns[idx];
+      if (!col) continue;
+
       const nullToggle = this.container.querySelector<HTMLInputElement>(
         `.record-null-toggle[data-idx="${idx}"]`,
       );
       const isNull = nullToggle?.checked ?? false;
 
       if (col.is_primary_key) {
-        draft[idx] = this.record!.original[idx] ?? null;
-        return;
+        draft[idx] = this.record.original[idx] ?? null;
+        continue;
       }
 
       const input = this.container.querySelector<HTMLElement>(
@@ -343,36 +389,49 @@ export class RecordPanel {
 
       if (nowBtn?.classList.contains("active")) {
         draft[idx] = isNull ? null : SQL_NOW_SENTINEL;
-        return;
+        continue;
       }
 
-      if (!input) return;
+      if (!input) continue;
 
-      const original = this.record!.original[idx] ?? null;
+      const original = this.record.original[idx] ?? null;
       if (input instanceof HTMLSelectElement) {
         if (col.enum_values && col.enum_values.length > 0) {
           draft[idx] = isNull ? null : input.value;
-        } else if (typeof original === "boolean") {
-          draft[idx] = input.value === "true";
+        } else if (input.dataset["kind"] === "boolean") {
+          draft[idx] = isNull ? null : input.value === "true";
         } else {
           draft[idx] = isNull ? null : input.value;
         }
       } else if (input instanceof HTMLTextAreaElement) {
-        draft[idx] = parseFieldInput(input.value, isNull, original);
+        draft[idx] = this.parseNonTextGuarded(input.value, isNull, original, col);
       } else if (input instanceof HTMLInputElement) {
         if (isNull) {
           draft[idx] = null;
         } else if (temporal === "date") {
           draft[idx] = input.value;
         } else if (temporal === "timestamp") {
-          draft[idx] = fromDateTimeLocalValue(input.value);
+          // Re-attach the stored value's timezone designator so a
+          // `timestamptz` is written back in its original offset, not
+          // reinterpreted in the DB session's zone.
+          const suffix = extractTimezoneSuffix(original);
+          const rebuilt = fromDateTimeLocalValue(input.value) + suffix;
+          const sameWallClock =
+            String(rebuilt).replace("T", " ") ===
+            String(original ?? "").replace("T", " ");
+          draft[idx] = sameWallClock ? original : rebuilt;
         } else if (temporal === "time") {
           draft[idx] = input.value;
         } else {
-          draft[idx] = parseFieldInput(input.value, isNull, original);
+          draft[idx] = this.parseNonTextGuarded(
+            input.value,
+            isNull,
+            original,
+            col,
+          );
         }
       }
-    });
+    }
 
     const dirty = this.columns.some(
       (_col, idx) =>

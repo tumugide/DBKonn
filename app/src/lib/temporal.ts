@@ -40,11 +40,10 @@ export function toDateTimeLocalValue(val: RowValue): string {
   if (val === null || val === undefined || isNowValue(val)) return "";
   const s = String(val);
 
-  if (s.includes("T")) {
-    const d = new Date(s);
-    if (!Number.isNaN(d.getTime())) return formatLocalDateTime(d);
-  }
-
+  // Extract the stored wall-clock fields verbatim. Parsing through
+  // `new Date()` and reformatting in the viewer's local zone shifted the
+  // displayed time (and, on save, the value written back) whenever the
+  // viewer wasn't in UTC — corrupting every timestamptz edit.
   const m = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::(\d{2}))?/);
   if (m) {
     const seconds = m[3] ?? "00";
@@ -52,6 +51,16 @@ export function toDateTimeLocalValue(val: RowValue): string {
   }
 
   return "";
+}
+
+/** The trailing timezone designator of a stored timestamp (`Z`, `+02:00`,
+ *  `-05`, or `""` for a zoneless value), so an edited `timestamptz` can be
+ *  written back in its original offset rather than the session default. */
+export function extractTimezoneSuffix(val: RowValue): string {
+  if (val === null || val === undefined || isNowValue(val)) return "";
+  const s = String(val).trim();
+  const m = s.match(/(Z|[+-]\d{2}(?::?\d{2})?)$/);
+  return m ? m[1]! : "";
 }
 
 export function toTimeInputValue(val: RowValue): string {
@@ -66,9 +75,4 @@ export function fromDateTimeLocalValue(raw: string): string {
   const m = raw.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::(\d{2}))?/);
   if (!m) return raw;
   return `${m[1]} ${m[2]}:${m[3] ?? "00"}`;
-}
-
-function formatLocalDateTime(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }

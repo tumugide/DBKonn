@@ -1378,6 +1378,17 @@ label {
     margin: 6px 10px 0;
     flex-shrink: 0;
 }
+.record-panel-note {
+    margin: 6px 10px 0;
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-muted);
+    background: var(--bg-overlay);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    flex-shrink: 0;
+}
 .record-panel-fields {
     flex: 1;
     overflow-y: auto;
