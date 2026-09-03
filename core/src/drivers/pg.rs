@@ -334,11 +334,20 @@ impl DbConnection for PgDriver {
 
     async fn list_tables(&self, schema: Option<&str>) -> Result<Vec<TableInfo>, CoreError> {
         let schema = schema.unwrap_or("public");
+        // Query pg_catalog directly rather than information_schema.tables.
+        // information_schema views are filtered to objects the connecting
+        // role has some privilege on, so a low-privilege login (or one that
+        // only has USAGE on the schema) got an empty table list even though
+        // `list_schemas` — which reads pg_namespace — still showed the
+        // schema. pg_class also surfaces materialized views, foreign tables
+        // and partitioned tables, which information_schema.tables omits.
         let rows = sqlx::query(
-            "SELECT table_schema, table_name, table_type \
-             FROM information_schema.tables \
-             WHERE table_schema = $1 \
-             ORDER BY table_name",
+            "SELECT n.nspname, c.relname, c.relkind::text \
+             FROM pg_catalog.pg_class c \
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = $1 \
+               AND c.relkind = ANY(ARRAY['r','p','v','m','f']::\"char\"[]) \
+             ORDER BY c.relname",
         )
         .bind(schema)
         .fetch_all(&self.pool)
@@ -346,14 +355,21 @@ impl DbConnection for PgDriver {
 
         Ok(rows
             .iter()
-            .map(|r| TableInfo {
-                schema: r.get::<String, _>(0),
-                name: r.get::<String, _>(1),
-                table_type: r
-                    .get::<String, _>(2)
-                    .to_lowercase()
-                    .replace("base table", "table"),
-                row_count_estimate: None,
+            .map(|r| {
+                let relkind: String = r.get(2);
+                let table_type = match relkind.as_str() {
+                    "v" => "view",
+                    "m" => "materialized view",
+                    "f" => "foreign table",
+                    _ => "table", // 'r' ordinary, 'p' partitioned
+                }
+                .to_string();
+                TableInfo {
+                    schema: r.get::<String, _>(0),
+                    name: r.get::<String, _>(1),
+                    table_type,
+                    row_count_estimate: None,
+                }
             })
             .collect())
     }
