@@ -109,8 +109,27 @@ export class DataGrid {
     this.scrollEl.addEventListener("scroll", () => this.scheduleRender());
   }
 
+  // Hard ceiling on how long the overlay may stay up. It's a backstop, not a
+  // progress model: if whatever turned it on never turns it off (a stuck IPC
+  // call, a loader that returned down a path that skipped its cleanup), the
+  // grid must still end up readable rather than dimmed behind a spinner
+  // forever. Real loads clear it far sooner via setData()/clear().
+  private static readonly LOADING_CEILING_MS = 60_000;
+  private loadingTimer?: ReturnType<typeof setTimeout>;
+
   setLoading(loading: boolean) {
-    if (this.overlayEl) this.overlayEl.hidden = !loading;
+    if (this.loadingTimer) {
+      clearTimeout(this.loadingTimer);
+      this.loadingTimer = undefined;
+    }
+    if (!this.overlayEl) return;
+    this.overlayEl.hidden = !loading;
+    if (loading) {
+      this.loadingTimer = setTimeout(() => {
+        if (this.overlayEl) this.overlayEl.hidden = true;
+        this.loadingTimer = undefined;
+      }, DataGrid.LOADING_CEILING_MS);
+    }
   }
 
   setData(result: QueryResult) {
@@ -437,6 +456,7 @@ export class DataGrid {
       // removes them.
       this.dragAnchor = null;
     }
+    this.setLoading(false);
     this.result = undefined;
     this.multiSelect.clear();
     this.container.innerHTML = "";

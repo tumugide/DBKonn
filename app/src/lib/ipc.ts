@@ -74,6 +74,42 @@ export interface ParseError {
 
 // ── IPC calls ─────────────────────────────────────────────────────────────────
 
+/** Default ceiling for a browse/metadata round-trip. Generous — this is a
+ *  stuck-call backstop, not a query budget. */
+export const IPC_TIMEOUT_MS = 60_000;
+
+/**
+ * Reject a call that never settles.
+ *
+ * A Tauri `invoke` promise that neither resolves nor rejects (a command that
+ * never returns a response) wedges every caller awaiting it — including the
+ * table grid's loader, whose `finally` then never runs and leaves the loading
+ * overlay stuck on top of otherwise-good rows with nothing able to clear it.
+ * Turning that into a rejection lets normal error handling take over.
+ */
+export function withTimeout<T>(
+  p: Promise<T>,
+  what: string,
+  ms = IPC_TIMEOUT_MS,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${what} timed out after ${Math.round(ms / 1000)}s`)),
+      ms,
+    );
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 export const ipc = {
   connectDb:           (config: ConnectionConfig)                               => invoke<string>("connect_db", { config }),
   disconnectDb:        (connId: string)                                         => invoke<void>("disconnect_db", { connId }),
@@ -83,13 +119,13 @@ export const ipc = {
   createDatabase:      (connId: string, name: string)                           => invoke<void>("create_database", { connId, name }),
   listSchemas:         (connId: string)                                         => invoke<SchemaInfo[]>("list_schemas", { connId }),
   listTables:          (connId: string, schema?: string)                        => invoke<TableInfo[]>("list_tables", { connId, schema }),
-  describeTable:       (connId: string, schema: string|undefined, table: string) => invoke<[ColumnInfo[], IndexInfo[]]>("describe_table", { connId, schema, table }),
+  describeTable:       (connId: string, schema: string|undefined, table: string) => withTimeout(invoke<[ColumnInfo[], IndexInfo[]]>("describe_table", { connId, schema, table }), `describe ${table}`),
 
   executeQuery:        (connId: string, sql: string)                            => invoke<QueryResult>("execute_query", { connId, sql }),
   fetchTableRows:      (connId: string, schema: string|undefined, table: string, page: PageRequest, whereClause?: string) =>
-                         invoke<QueryResult>("fetch_table_rows", { connId, schema, table, page, whereClause }),
+                         withTimeout(invoke<QueryResult>("fetch_table_rows", { connId, schema, table, page, whereClause }), `fetch ${table}`),
   countRows:           (connId: string, schema: string|undefined, table: string, whereClause?: string) =>
-                         invoke<number>("count_rows", { connId, schema, table, whereClause }),
+                         withTimeout(invoke<number>("count_rows", { connId, schema, table, whereClause }), `count ${table}`),
 
   validateSql:         (config: ConnectionConfig, sql: string)                  => invoke<ParseError|null>("validate_sql", { config, sql }),
 
