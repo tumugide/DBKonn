@@ -750,6 +750,13 @@ body {
     flex: 1;
     overflow: auto;
 }
+.grid-scroll:focus {
+    outline: none;
+}
+.grid-scroll:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+}
 
 /* ── Grid loading overlay ────────────────────────────────────────────────── */
 .grid-loading-overlay {

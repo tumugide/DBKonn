@@ -1,4 +1,34 @@
 import type { ColumnInfo, QueryResult, RowValue } from "../lib/ipc";
+import { showContextMenu } from "./ContextMenu";
+
+// Copy text to the clipboard. `navigator.clipboard` isn't always available in
+// the webview, so fall back to a hidden textarea + execCommand.
+function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+  } else {
+    fallbackCopy(text);
+  }
+}
+function fallbackCopy(text: string) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;opacity:0;pointer-events:none;";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand("copy");
+  } catch {
+    /* nothing else to try */
+  }
+  ta.remove();
+}
+
+function cellToText(v: RowValue): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
 
 // ── Virtual-scroll data grid ──────────────────────────────────────────────────
 // Simple windowed renderer: renders only rows in viewport + buffer.
@@ -60,6 +90,9 @@ export class DataGrid {
     this.scrollEl = document.createElement("div");
     this.scrollEl.className = "grid-scroll";
     this.scrollEl.style.cssText = "flex:1; overflow:auto; position:relative;";
+    this.scrollEl.tabIndex = 0;
+    this.scrollEl.setAttribute("role", "grid");
+    this.scrollEl.addEventListener("keydown", (e) => this.onKeyNav(e));
 
     const table = document.createElement("table");
     table.className = "data-grid";
@@ -146,7 +179,9 @@ export class DataGrid {
   // between rows) is left for the row's own "click" listener to handle.
   private onRowMouseDown(e: MouseEvent, idx: number) {
     if (e.button !== 0) return;
-    e.preventDefault();
+    // Don't preventDefault here — that blocked selecting text inside a cell.
+    // Native selection is suppressed only once an actual drag-select starts
+    // (see onDragMove).
 
     this.dragAnchor = idx;
     this.dragMoved = false;
@@ -181,6 +216,10 @@ export class DataGrid {
     if (idx === this.dragAnchor && !this.dragMoved) return;
 
     this.dragMoved = true;
+    // Now that this is a real range-select drag, suppress the native text
+    // selection it would otherwise smear across rows.
+    e.preventDefault();
+    window.getSelection()?.removeAllRanges();
     const lo = Math.min(this.dragAnchor, idx);
     const hi = Math.max(this.dragAnchor, idx);
     const next = new Set(this.dragBase);
@@ -188,6 +227,50 @@ export class DataGrid {
     this.multiSelect = next;
     this.opts.onSelectionChange?.(this.sortedSelection());
     this.forceRerender();
+  }
+
+  // ── Keyboard navigation ───────────────────────────────────────────────
+  private onKeyNav(e: KeyboardEvent) {
+    if (!this.result || this.result.rows.length === 0) return;
+    const n = this.result.rows.length;
+    const cur = this.opts.selectedRowIndex ?? -1;
+
+    if (e.key === "Enter") {
+      if (cur >= 0 && cur < n) {
+        e.preventDefault();
+        this.multiSelect = new Set([cur]);
+        this.opts.onSelectionChange?.(this.sortedSelection());
+        this.opts.onRowClick?.(this.result.rows[cur]!, cur);
+      }
+      return;
+    }
+
+    let next = cur;
+    if (e.key === "ArrowDown") next = cur < 0 ? 0 : Math.min(n - 1, cur + 1);
+    else if (e.key === "ArrowUp") next = cur < 0 ? 0 : Math.max(0, cur - 1);
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = n - 1;
+    else if (e.key === "PageDown")
+      next = Math.min(n - 1, (cur < 0 ? 0 : cur) + 12);
+    else if (e.key === "PageUp") next = Math.max(0, (cur < 0 ? 0 : cur) - 12);
+    else return;
+
+    e.preventDefault();
+    if (next === cur) return;
+    this.opts.selectedRowIndex = next;
+    this.multiSelect = new Set([next]);
+    this.opts.onSelectionChange?.(this.sortedSelection());
+    this.scrollRowIntoView(next);
+    this.forceRerender();
+  }
+
+  private scrollRowIntoView(idx: number) {
+    const top = idx * ROW_HEIGHT;
+    const viewTop = this.scrollEl.scrollTop;
+    const viewH = this.scrollEl.clientHeight;
+    if (top < viewTop) this.scrollEl.scrollTop = top;
+    else if (top + ROW_HEIGHT > viewTop + viewH)
+      this.scrollEl.scrollTop = top + ROW_HEIGHT - viewH;
   }
 
   private renderHeaders() {
@@ -271,12 +354,46 @@ export class DataGrid {
       tr.classList.add("multi-selected");
     }
     tr.addEventListener("mousedown", (e) => this.onRowMouseDown(e as MouseEvent, idx));
+    tr.addEventListener("contextmenu", (e) => {
+      const ev = e as MouseEvent;
+      const td = (ev.target as HTMLElement | null)?.closest("td");
+      const cellText = td?.textContent ?? "";
+      ev.preventDefault();
+      showContextMenu(ev.clientX, ev.clientY, [
+        { label: "Copy cell", onSelect: () => copyText(cellText) },
+        {
+          label: "Copy row (TSV)",
+          onSelect: () => copyText(row.map(cellToText).join("\t")),
+        },
+        {
+          label: "Copy row (JSON)",
+          onSelect: () => {
+            const cols = this.result?.columns ?? [];
+            const obj = Object.fromEntries(
+              cols.map((c, i) => [c.name, row[i] ?? null]),
+            );
+            copyText(JSON.stringify(obj, null, 2));
+          },
+        },
+      ]);
+    });
     tr.addEventListener("click", (e) => {
       const evt = e as MouseEvent;
       if (this.dragMoved) {
         // A drag just set the selection — don't also treat the trailing
         // click as a plain/cmd row select.
         this.dragMoved = false;
+        return;
+      }
+      // If the user just selected text inside a cell, honour that instead of
+      // hijacking the click as a row select.
+      const sel = window.getSelection();
+      if (
+        sel &&
+        !sel.isCollapsed &&
+        sel.toString().trim() !== "" &&
+        tr.contains(sel.anchorNode)
+      ) {
         return;
       }
       if (evt.metaKey || evt.ctrlKey) {
