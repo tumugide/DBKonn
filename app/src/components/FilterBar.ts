@@ -31,6 +31,14 @@ export class FilterBar {
     this.engine = engine;
   }
 
+  // All of FilterBar's listeners are delegated onto elements inside
+  // `this.container`, which the owning tab body clears on teardown — so this
+  // only needs to drop the DOM. Present so the tab renderer can call
+  // `destroy()` uniformly across its components.
+  destroy() {
+    this.container.innerHTML = "";
+  }
+
   setColumns(cols: ColumnInfo[]) {
     if (cols.length === 0) return;
 

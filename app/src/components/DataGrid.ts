@@ -294,6 +294,21 @@ export class DataGrid {
     this.thead.innerHTML = "";
     this.tbody.innerHTML = "";
   }
+
+  // Called when the owning tab body is torn down. Drops references and any
+  // in-progress drag listeners so a stale grid can't keep reacting to
+  // window-level mouse events after its DOM is gone.
+  destroy() {
+    if (this.dragAnchor !== null) {
+      // A drag was mid-flight; its window listeners are anonymous, but
+      // clearing the anchor makes onDragMove a no-op and the next mouseup
+      // removes them.
+      this.dragAnchor = null;
+    }
+    this.result = undefined;
+    this.multiSelect.clear();
+    this.container.innerHTML = "";
+  }
 }
 
 function formatCell(val: RowValue): { text: string; cls?: string } {

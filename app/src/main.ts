@@ -190,7 +190,7 @@ function renderSidebar() {
     // ── Connected mode ─────────────────────────────────────────────────────
     buf.push(`
       <div class="sidebar-header connected" style="--conn-color:${ac.config.color ?? avatarColor(ac.config.id)}">
-        <span>${esc(ac.config.name)}</span>
+        <span class="sidebar-header-name" title="${esc(ac.config.name)}">${esc(ac.config.name)}</span>
         <div class="sidebar-header-actions">
           <button class="btn-icon" id="sb-refresh-tree" title="Refresh database (schemas and tables)" aria-label="Refresh database (schemas and tables)">⟳</button>
           <button class="btn-icon danger" id="sb-disconnect" title="Disconnect">Quit</button>
@@ -434,9 +434,22 @@ function renderConnRail() {
 
 // ── Database / Schema switching ───────────────────────────────────────────────
 
+let switchDatabaseInFlight = false;
+
 async function switchDatabase(dbName: string) {
   const ac = appState.activeConn.value;
   if (!ac || ac.selectedDatabase === dbName) return;
+
+  // Switching database disconnects/reconnects and drops every open tab —
+  // don't do that silently on top of an unsaved row edit. Re-render the
+  // sidebar so the DB dropdown snaps back to the current database if the
+  // user cancels.
+  if (!confirmDiscardIfDirty()) {
+    renderSidebar();
+    return;
+  }
+  if (switchDatabaseInFlight) return;
+  switchDatabaseInFlight = true;
 
   appState.status.set(`Switching to database: ${dbName}…`);
 
@@ -478,6 +491,8 @@ async function switchDatabase(dbName: string) {
   } catch (e) {
     appState.status.set(`Error: ${e}`);
     statusDot.className = "status-dot error";
+  } finally {
+    switchDatabaseInFlight = false;
   }
 }
 
@@ -525,15 +540,31 @@ async function refreshSchemaTree(opts?: { silent?: boolean }) {
   if (!opts?.silent) refreshBtn?.classList.add("spinning");
 
   try {
-    const [databases, schemas, tables] = await Promise.all([
+    // Resolve databases/schemas first, THEN list tables for the *effective*
+    // schema. Fetching tables up-front with a possibly-stale
+    // `ac.selectedSchema` (and, on MySQL, the schema instead of the database)
+    // returned an empty list that then blanked the whole table tree.
+    const [databases, schemas] = await Promise.all([
       ipc.listDatabases(ac.connId).catch(() => ac.databases),
       ipc.listSchemas(ac.connId).catch(() => ac.schemas),
-      ipc.listTables(ac.connId, ac.selectedSchema).catch(() => ac.tables),
     ]);
 
     const selectedSchema = schemas.some((s) => s.name === ac.selectedSchema)
       ? ac.selectedSchema
-      : (schemas.find((s) => s.name === "public" || s.name === "dbo")?.name ?? schemas[0]?.name);
+      : (schemas.find((s) => s.name === "public" || s.name === "dbo")?.name ??
+        schemas[0]?.name ??
+        ac.selectedSchema);
+
+    // MySQL browses tables by database, not by information_schema schema.
+    const tableScope =
+      ac.config.engine === "mysql"
+        ? (ac.selectedDatabase ?? selectedSchema)
+        : selectedSchema;
+
+    const tables = await ipc
+      .listTables(ac.connId, tableScope)
+      .catch(() => ac.tables);
+
     const selectedTable = tables.some((t) => t.name === ac.selectedTable) ? ac.selectedTable : undefined;
 
     const updated = { ...ac, databases, schemas, selectedSchema, tables, selectedTable };
@@ -553,6 +584,15 @@ async function refreshSchemaTree(opts?: { silent?: boolean }) {
     if (appState.activeConn.value?.id !== sessionId) return;
 
     appState.activeConn.set(updated);
+
+    // If the connected sidebar isn't currently mounted (e.g. this ran right
+    // after a focus switch, before renderSidebar), rebuild it wholesale
+    // instead of no-op'ing on the missing tree container.
+    if (!document.getElementById("sb-table-tree")) {
+      renderSidebar();
+      if (!opts?.silent) appState.status.set("Schema refreshed");
+      return;
+    }
 
     renderTableTree(updated);
 
@@ -689,6 +729,26 @@ let dataGrid: DataGrid | null = null;
 let filterBar: FilterBar | null = null;
 let recordPanel: RecordPanel | null = null;
 
+// Monotonic id for the active table tab's in-flight data fetch (A14), and a
+// handle to that tab's `loadTableData` so pagination can reload rows in place
+// instead of tearing down and rebuilding the whole tab (A28).
+let tableDataRequestSeq = 0;
+let activeTableReload: (() => void) | null = null;
+
+// Tears down the components owned by the previously-rendered tab body so
+// their document/theme subscriptions and CodeMirror views don't leak each
+// time a tab is (re)rendered.
+function destroyActiveTabComponents() {
+  sqlEditor?.destroy();
+  dataGrid?.destroy();
+  filterBar?.destroy();
+  sqlEditor = null;
+  dataGrid = null;
+  filterBar = null;
+  recordPanel = null;
+  activeTableReload = null;
+}
+
 function confirmDiscardIfDirty(): boolean {
   const rec = appState.selectedRecord.value;
   if (rec?.dirty) {
@@ -725,6 +785,7 @@ function renderContentArea() {
 }
 
 function renderActiveTabContent() {
+  destroyActiveTabComponents();
   mainContent.innerHTML = "";
   mainContent.style.overflow = "";
   mainContent.style.padding = "";
@@ -803,6 +864,11 @@ function renderQueryTabContent(tab: QueryTab) {
           if (!ac3) return;
           const result = await ipc.executeQuery(ac3.connId, sql);
           if (result.error) throw new Error(result.error);
+          if (result.affected_rows === 0) {
+            throw new Error(
+              "No rows were updated — this row may have been changed or deleted by someone else, or the query has no key column to match it.",
+            );
+          }
           appState.status.set(
             `Updated ${result.affected_rows ?? 1} row(s) · ${result.execution_time_ms}ms`,
           );
@@ -999,6 +1065,11 @@ function renderTableTabContent(_tab: TableTab) {
       if (!ac2) return;
       const result = await ipc.executeQuery(ac2.connId, sql);
       if (result.error) throw new Error(result.error);
+      if (result.affected_rows === 0) {
+        throw new Error(
+          "No rows were updated — this row may have been changed or deleted by someone else, or the table has no key to match it. Reload the table to see the current data.",
+        );
+      }
       appState.status.set(
         `Updated ${result.affected_rows ?? 1} row(s) · ${result.execution_time_ms}ms`,
       );
@@ -1024,6 +1095,10 @@ function renderTableTabContent(_tab: TableTab) {
   pagination.id = "pagination";
   tableMain.appendChild(pagination);
 
+  // Expose this tab's reload so changePage/changePageSize can refresh rows in
+  // place rather than rebuilding the entire tab (which re-issues describeTable
+  // and leaks the torn-down components).
+  activeTableReload = () => void loadTableData();
   loadTableData();
 
   function selectRecord(row: RowValue[], rowIndex: number) {
@@ -1064,6 +1139,18 @@ function renderTableTabContent(_tab: TableTab) {
     const ac2 = appState.activeConn.value;
     if (!ac2?.selectedTable) return;
 
+    // Guard against a slow response painting stale rows onto a grid that has
+    // since moved on (fast table switch, late auto-refresh). Only the most
+    // recent call is allowed to touch the grid.
+    const reqId = ++tableDataRequestSeq;
+    const reqConnId = ac2.connId;
+    const reqTable = ac2.selectedTable;
+    const isCurrent = () => {
+      if (reqId !== tableDataRequestSeq) return false;
+      const now = appState.activeConn.value;
+      return !!now && now.connId === reqConnId && now.selectedTable === reqTable;
+    };
+
     rowInfo.textContent = "Loading…";
 
     try {
@@ -1088,9 +1175,20 @@ function renderTableTabContent(_tab: TableTab) {
         ),
       ]);
 
+      if (!isCurrent()) return;
+
       if (rows.error) {
         rowInfo.textContent = `Error: ${rows.error}`;
         return;
+      }
+
+      // A delete/filter can leave `page` past the last page — clamp and
+      // refetch so the grid isn't stranded on an empty out-of-range page
+      // ("Rows 21–5 of 5").
+      const maxPage = Math.max(0, Math.ceil(total / s.pageSize) - 1);
+      if (s.page > maxPage) {
+        appState.tableState.set({ ...appState.tableState.value, page: maxPage });
+        return loadTableData();
       }
 
       appState.tableState.set({
@@ -1125,7 +1223,7 @@ function renderTableTabContent(_tab: TableTab) {
     try {
       const result = await ipc.fetchTableRows(
         ac2.connId,
-        ac2.selectedSchema,
+        schemaForEngine(),
         ac2.selectedTable,
         {
           limit: MAX_EXPORT_ROWS,
@@ -1209,7 +1307,13 @@ function renderTableTabContent(_tab: TableTab) {
         alert(`Delete failed: ${res.error}`);
         return;
       }
-      appState.status.set(`Deleted ${res.affected_rows ?? sel.rows.length} row(s)`);
+      if (res.affected_rows === 0) {
+        alert(
+          "No rows were deleted — they may have already been removed, or this table has no key column to match them. Reloading the table.",
+        );
+      } else {
+        appState.status.set(`Deleted ${res.affected_rows ?? sel.rows.length} row(s)`);
+      }
       dataGrid?.clearSelection();
       await loadTableData();
     } catch (e) {
@@ -1306,7 +1410,10 @@ function changePage(newPage: number) {
   clearRecordSelection();
   const s = appState.tableState.value;
   appState.tableState.set({ ...s, page: newPage });
-  renderActiveTabContent();
+  // Reload rows in place when we can; only fall back to a full tab rebuild if
+  // this isn't a live table tab.
+  if (activeTableReload) activeTableReload();
+  else renderActiveTabContent();
 }
 
 function changePageSize(newPageSize: number) {
@@ -1314,10 +1421,12 @@ function changePageSize(newPageSize: number) {
   clearRecordSelection();
   const s = appState.tableState.value;
   appState.tableState.set({ ...s, pageSize: newPageSize, page: 0 });
-  renderActiveTabContent();
+  if (activeTableReload) activeTableReload();
+  else renderActiveTabContent();
 }
 
 function showConnectionsScreen() {
+  destroyActiveTabComponents();
   mainContent.innerHTML = "";
   mainContent.style.overflow = "auto";
   mainContent.style.padding = "20px";
@@ -1512,6 +1621,11 @@ function switchToConnSession(id: string) {
 // instead of starting blank. Entries are removed once a reconnect succeeds.
 const pendingRestores = new Map<string, StoredConnSession>();
 
+// Saved-config ids with a connect currently in flight. Two fast clicks on a
+// "Connect" button both passed the `existing` check (which only sees
+// *completed* sessions) and each opened its own duplicate live session.
+const connectInFlight = new Set<string>();
+
 // The interactive "user picked a saved connection" path — opens a new
 // session alongside whatever else is already connected, or just focuses it
 // if it's already open. `restoreParam` (used by boot()) seeds it with a
@@ -1523,6 +1637,8 @@ async function connectToDb(cfg: ConnectionConfig, restoreParam?: StoredConnSessi
     switchToConnSession(existing.id);
     return;
   }
+  if (connectInFlight.has(cfg.id)) return;
+  connectInFlight.add(cfg.id);
 
   const restore = restoreParam ?? pendingRestores.get(cfg.id);
 
@@ -1554,6 +1670,8 @@ async function connectToDb(cfg: ConnectionConfig, restoreParam?: StoredConnSessi
     statusDot.className = "status-dot error";
     appState.status.set(`Error: ${e}`);
     alert(`Connection failed:\n${e}`);
+  } finally {
+    connectInFlight.delete(cfg.id);
   }
 }
 
