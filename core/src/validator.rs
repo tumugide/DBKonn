@@ -24,12 +24,28 @@ pub fn validate_sql(sql: &str, engine: &DbEngine) -> Result<(), ParseError> {
 
     match result {
         Ok(_) => Ok(()),
-        Err(e) => Err(ParseError {
-            message: e.to_string(),
-            line: None,
-            col: None,
-        }),
+        Err(e) => {
+            let message = e.to_string();
+            let (line, col) = extract_line_col(&message);
+            Err(ParseError { message, line, col })
+        }
     }
+}
+
+/// sqlparser embeds the position in its error text as
+/// `… at Line: <n>, Column: <n>`. Pull those out so the editor can point at
+/// the offending token instead of only showing a message.
+fn extract_line_col(msg: &str) -> (Option<usize>, Option<usize>) {
+    let after_num = |marker: &str| -> Option<usize> {
+        let idx = msg.find(marker)? + marker.len();
+        let digits: String = msg[idx..]
+            .chars()
+            .skip_while(|c| c.is_whitespace())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        digits.parse().ok()
+    };
+    (after_num("Line:"), after_num("Column:"))
 }
 
 /// Validate a user-supplied `WHERE` clause fragment before it is
@@ -101,5 +117,25 @@ mod tests {
     fn rejects_syntactically_broken_fragments() {
         assert!(validate_where_clause("\"age\" > ", &DbEngine::Postgres).is_err());
         assert!(validate_where_clause("((\"a\" = 1)", &DbEngine::Postgres).is_err());
+    }
+
+    #[test]
+    fn reports_line_and_column_when_available() {
+        // sqlparser emits "... at Line: N, Column: N" for a bad leading token.
+        let err = validate_sql("SELCT 1", &DbEngine::Postgres).unwrap_err();
+        assert_eq!(err.line, Some(1));
+        assert_eq!(err.col, Some(1));
+
+        let err = validate_sql("SELECT * FROM t WHERE )", &DbEngine::Postgres).unwrap_err();
+        assert_eq!(err.line, Some(1));
+        assert_eq!(err.col, Some(23));
+    }
+
+    #[test]
+    fn tolerates_errors_without_a_position() {
+        let err = validate_sql("SELECT 1 +", &DbEngine::Postgres).unwrap_err();
+        assert_eq!(err.line, None);
+        assert_eq!(err.col, None);
+        assert!(!err.message.is_empty());
     }
 }
