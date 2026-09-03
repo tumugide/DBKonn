@@ -134,7 +134,6 @@ pub fn run() {
             commands::save_connection,
             commands::load_connections,
             commands::delete_connection,
-            commands::get_active_connections,
             commands::sync_theme_menu,
             commands::sync_query_menu,
         ])

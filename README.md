@@ -8,7 +8,7 @@ Built with **Tauri 2** (Rust backend) and a **TypeScript** frontend.
 
 Pre-built for **macOS on Apple Silicon** (M1/M2/M3/M4):
 
-**[Download DBKonn v0.1.1 — Apple Silicon (.dmg)](appbuilds/DBKonn_0.1.1_aarch64.dmg)**
+**[Download DBKonn v0.1.4 — Apple Silicon (.dmg)](appbuilds/DBKonn_0.1.4_aarch64.dmg)**
 
 **Install:**
 
@@ -93,13 +93,13 @@ Artifacts are written to:
 ```
 target/aarch64-apple-darwin/release/bundle/
 ├── macos/DBKonn.app
-└── dmg/DBKonn_0.1.0_aarch64.dmg
+└── dmg/DBKonn_0.1.4_aarch64.dmg
 ```
 
 Copy the `.dmg` into `appbuilds/` if you want to ship it from the repo:
 
 ```bash
-cp ../target/aarch64-apple-darwin/release/bundle/dmg/DBKonn_0.1.0_aarch64.dmg ../appbuilds/
+cp ../target/aarch64-apple-darwin/release/bundle/dmg/DBKonn_0.1.4_aarch64.dmg ../appbuilds/
 ```
 
 ### Build the CLI (`dbctl`)

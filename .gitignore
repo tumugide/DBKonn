@@ -5,6 +5,7 @@
 # Node
 node_modules/
 app/dist/
+app/dist.prev/
 app/node_modules/
 
 # Tauri

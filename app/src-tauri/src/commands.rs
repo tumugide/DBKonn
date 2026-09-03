@@ -92,12 +92,6 @@ pub async fn test_connection(mut config: ConnectionConfig) -> Result<bool, Strin
     Ok(true)
 }
 
-#[tauri::command]
-pub async fn get_active_connections(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    let conns = state.connections.read().await;
-    Ok(conns.keys().cloned().collect())
-}
-
 // ── Schema discovery ──────────────────────────────────────────────────────────
 
 #[tauri::command]
