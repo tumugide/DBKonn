@@ -724,6 +724,7 @@ export class SqlEditor {
         result.rows,
         `query_result.${formatMeta[format].ext}`,
         "query_result",
+        this.config?.engine ?? "postgres",
       );
     } catch (e) {
       alert(`Export failed: ${e}`);

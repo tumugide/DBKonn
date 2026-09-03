@@ -42,10 +42,23 @@ const STRING_OPS: FilterOperator[] = [
 const NUMERIC_COMPARE_OPS: FilterOperator[] = ["<", "<=", ">", ">="];
 const LIKE_OPS: FilterOperator[] = ["LIKE", "NOT LIKE", "ILIKE", "NOT ILIKE"];
 
+// The filter UI's LIKE/ILIKE is a substring search, so treat the user's text
+// as a literal: escape the LIKE metacharacters (\ % _) with a backslash and
+// wrap in %…%. Callers pair this with `ESCAPE '\'` on the SQL. Previously any
+// term containing % or _ was passed through raw, so `user_id` matched
+// `userXid` instead of the literal string.
 function likePattern(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed || /[%_]/.test(trimmed)) return trimmed;
-  return `%${trimmed}%`;
+  if (!trimmed) return trimmed;
+  const escaped = trimmed.replace(/[\\%_]/g, "\\$&");
+  return `%${escaped}%`;
+}
+
+// The ESCAPE clause for the backslash we use in likePattern(). MySQL treats
+// `\` as a string escape, so the escape char itself must be written doubled
+// there; the other dialects take it literally.
+function likeEscapeClause(engine: DbEngine): string {
+  return engine === "mysql" ? " ESCAPE '\\\\'" : " ESCAPE '\\'";
 }
 
 function isNumericDataType(dataType: string | undefined): boolean {
@@ -127,15 +140,16 @@ export function compileWhereClause(
     } else if (LIKE_OPS.includes(r.operator)) {
       if (!r.value.trim()) continue;
       const pattern = quoteValue(engine, likePattern(r.value));
+      const esc = likeEscapeClause(engine);
       if (r.operator === "ILIKE" || r.operator === "NOT ILIKE") {
         if (engine === "postgres") {
-          expr = `${col} ${r.operator} ${pattern}`;
+          expr = `${col} ${r.operator} ${pattern}${esc}`;
         } else {
           const likeOp = r.operator === "ILIKE" ? "LIKE" : "NOT LIKE";
-          expr = `LOWER(${col}) ${likeOp} LOWER(${pattern})`;
+          expr = `LOWER(${col}) ${likeOp} LOWER(${pattern})${esc}`;
         }
       } else {
-        expr = `${col} ${r.operator} ${pattern}`;
+        expr = `${col} ${r.operator} ${pattern}${esc}`;
       }
     } else {
       if (!r.value.trim()) continue;

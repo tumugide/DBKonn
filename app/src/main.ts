@@ -1329,6 +1329,7 @@ function renderTableTabContent(_tab: TableTab) {
         result.rows,
         `${ac2.selectedTable}.${formatMeta[format].ext}`,
         ac2.selectedTable,
+        ac2.config.engine,
       );
     } catch (e) {
       alert(`Export failed: ${e}`);
@@ -1418,6 +1419,7 @@ function renderTableTabContent(_tab: TableTab) {
         sel.rows,
         `${ac2.selectedTable}_selected.${formatMeta[format].ext}`,
         ac2.selectedTable,
+        ac2.config.engine,
       );
     } catch (e) {
       alert(`Export failed: ${e}`);
@@ -1502,10 +1504,29 @@ function changePage(newPage: number) {
   else renderActiveTabContent();
 }
 
+const ALL_PAGE_CONFIRM_THRESHOLD = 50_000;
+
 function changePageSize(newPageSize: number) {
   if (!confirmDiscardIfDirty()) return;
-  clearRecordSelection();
   const s = appState.tableState.value;
+  // "All" pulls the whole table into memory in one grid. Warn before doing
+  // that on a large (or unknown-size) table.
+  if (
+    newPageSize >= PAGE_SIZE_ALL &&
+    (s.totalRows === 0 || s.totalRows > ALL_PAGE_CONFIRM_THRESHOLD)
+  ) {
+    const rowsText =
+      s.totalRows > 0 ? `${s.totalRows.toLocaleString()} rows` : "every row";
+    if (
+      !confirm(
+        `Load ${rowsText} into the grid at once? This can be slow and use a lot of memory.`,
+      )
+    ) {
+      renderActiveTabContent(); // reset the page-size <select>
+      return;
+    }
+  }
+  clearRecordSelection();
   appState.tableState.set({ ...s, pageSize: newPageSize, page: 0 });
   if (activeTableReload) activeTableReload();
   else renderActiveTabContent();

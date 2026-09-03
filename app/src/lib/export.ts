@@ -2,8 +2,9 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import writeExcelFile from "write-excel-file/universal";
 
-import type { ColumnInfo, RowValue } from "./ipc";
+import type { ColumnInfo, DbEngine, RowValue } from "./ipc";
 import { escapeHtml } from "./escape";
+import { quoteIdent } from "./sqlQuote";
 
 export type ExportFormat = "csv" | "tsv" | "xlsx" | "json" | "markdown" | "html" | "sql";
 
@@ -28,11 +29,24 @@ function cellText(v: RowValue): string {
   return String(v);
 }
 
+// Neutralise spreadsheet formula injection: a cell that a spreadsheet would
+// evaluate as a formula (leading = + - @, or a leading tab/CR) gets a
+// leading apostrophe so it's imported as literal text.
+function guardFormula(text: string): string {
+  return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+}
+
 function escapeDelimited(text: string, delimiter: string): string {
-  if (text.includes(delimiter) || text.includes('"') || text.includes("\n") || text.includes("\r")) {
-    return `"${text.replace(/"/g, '""')}"`;
+  const guarded = guardFormula(text);
+  if (
+    guarded.includes(delimiter) ||
+    guarded.includes('"') ||
+    guarded.includes("\n") ||
+    guarded.includes("\r")
+  ) {
+    return `"${guarded.replace(/"/g, '""')}"`;
   }
-  return text;
+  return guarded;
 }
 
 function toDelimited(columns: ColumnInfo[], rows: RowValue[][], delimiter: string): string {
@@ -99,19 +113,32 @@ ${tbody}
 `;
 }
 
-function sqlLiteral(v: RowValue): string {
+function sqlLiteral(v: RowValue, engine: DbEngine): string {
   if (v === null || v === undefined) return "NULL";
-  if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
+  if (typeof v === "boolean") {
+    return engine === "postgres" ? (v ? "TRUE" : "FALSE") : v ? "1" : "0";
+  }
   if (typeof v === "number") return String(v);
-  if (typeof v === "object") return `'${JSON.stringify(v).replace(/'/g, "''")}'`;
-  return `'${v.replace(/'/g, "''")}'`;
+  const s = typeof v === "object" ? JSON.stringify(v) : v;
+  // MySQL treats `\` as a string escape by default.
+  const escaped =
+    engine === "mysql"
+      ? s.replace(/\\/g, "\\\\").replace(/'/g, "''")
+      : s.replace(/'/g, "''");
+  return `'${escaped}'`;
 }
 
-export function toSqlInsert(columns: ColumnInfo[], rows: RowValue[][], tableName: string): string {
-  const columnList = columns.map((c) => `"${c.name}"`).join(", ");
+export function toSqlInsert(
+  columns: ColumnInfo[],
+  rows: RowValue[][],
+  tableName: string,
+  engine: DbEngine = "postgres",
+): string {
+  const columnList = columns.map((c) => quoteIdent(engine, c.name)).join(", ");
+  const table = quoteIdent(engine, tableName);
   const statements = rows.map((row) => {
-    const values = row.map((v) => sqlLiteral(v)).join(", ");
-    return `INSERT INTO "${tableName}" (${columnList}) VALUES (${values});`;
+    const values = row.map((v) => sqlLiteral(v, engine)).join(", ");
+    return `INSERT INTO ${table} (${columnList}) VALUES (${values});`;
   });
   return statements.join("\n");
 }
@@ -133,6 +160,7 @@ export async function saveExport(
   rows: RowValue[][],
   suggestedName: string,
   tableName: string,
+  engine: DbEngine = "postgres",
 ): Promise<void> {
   const meta = formatMeta[format];
   const path = await save({
@@ -164,7 +192,7 @@ export async function saveExport(
       content = toHtml(columns, rows, tableName);
       break;
     case "sql":
-      content = toSqlInsert(columns, rows, tableName);
+      content = toSqlInsert(columns, rows, tableName, engine);
       break;
   }
   await writeTextFile(path, content);
