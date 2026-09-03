@@ -54,7 +54,7 @@ fn mysql_value_to_row_value(row: &sqlx::mysql::MySqlRow, idx: usize) -> RowValue
                     .unwrap_or(RowValue::Null)
             }),
 
-        "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "INTEGER" | "BIGINT" => row
+        "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "INTEGER" | "BIGINT" | "YEAR" => row
             .try_get::<i64, _>(idx)
             .map(RowValue::Integer)
             .unwrap_or_else(|_| {
@@ -63,10 +63,62 @@ fn mysql_value_to_row_value(row: &sqlx::mysql::MySqlRow, idx: usize) -> RowValue
                     .unwrap_or(RowValue::Null)
             }),
 
-        "FLOAT" | "DOUBLE" | "DECIMAL" | "NUMERIC" | "REAL" => row
+        "FLOAT" | "DOUBLE" | "REAL" => row
             .try_get::<f64, _>(idx)
             .map(RowValue::Float)
             .unwrap_or(RowValue::Null),
+
+        // Keep full precision — never round a fixed-point column through f64.
+        "DECIMAL" | "NUMERIC" | "NEWDECIMAL" => row
+            .try_get::<rust_decimal::Decimal, _>(idx)
+            .map(|d| RowValue::Text(d.to_string()))
+            .unwrap_or_else(|_| {
+                row.try_get::<String, _>(idx)
+                    .map(RowValue::Text)
+                    .unwrap_or(RowValue::Null)
+            }),
+
+        // Temporal types have no `String` decoder in sqlx's binary protocol —
+        // the old catch-all `try_get::<String>` failed the strict type check
+        // and every DATE/DATETIME/TIMESTAMP/TIME cell rendered as NULL.
+        "DATE" => row
+            .try_get::<chrono::NaiveDate, _>(idx)
+            .map(|d| RowValue::Text(d.to_string()))
+            .unwrap_or(RowValue::Null),
+
+        "DATETIME" => row
+            .try_get::<chrono::NaiveDateTime, _>(idx)
+            .map(|dt| RowValue::Text(dt.format("%Y-%m-%d %H:%M:%S%.6f").to_string()))
+            .unwrap_or(RowValue::Null),
+
+        "TIMESTAMP" => row
+            .try_get::<chrono::DateTime<chrono::Utc>, _>(idx)
+            .map(|dt| RowValue::Text(dt.to_rfc3339()))
+            .unwrap_or_else(|_| {
+                row.try_get::<chrono::NaiveDateTime, _>(idx)
+                    .map(|dt| RowValue::Text(dt.format("%Y-%m-%d %H:%M:%S%.6f").to_string()))
+                    .unwrap_or(RowValue::Null)
+            }),
+
+        "TIME" => row
+            .try_get::<chrono::NaiveTime, _>(idx)
+            .map(|t| RowValue::Text(t.to_string()))
+            .unwrap_or_else(|_| {
+                // MySQL TIME can be negative or exceed 24h, which NaiveTime
+                // can't represent — fall back to the raw text form.
+                row.try_get_unchecked::<String, _>(idx)
+                    .map(RowValue::Text)
+                    .unwrap_or(RowValue::Null)
+            }),
+
+        "BIT" => row
+            .try_get::<u64, _>(idx)
+            .map(|v| RowValue::Integer(v as i64))
+            .unwrap_or_else(|_| {
+                row.try_get::<bool, _>(idx)
+                    .map(RowValue::Bool)
+                    .unwrap_or(RowValue::Null)
+            }),
 
         "JSON" => row
             .try_get::<serde_json::Value, _>(idx)
@@ -268,8 +320,11 @@ impl DbConnection for MySqlDriver {
                 IndexInfo {
                     name: r.get::<String, _>(0),
                     columns: cols_str.split(',').map(|s| s.to_string()).collect(),
-                    is_unique: r.try_get::<i8, _>(2).map(|v| v != 0).unwrap_or(false),
-                    is_primary: r.try_get::<i8, _>(3).map(|v| v != 0).unwrap_or(false),
+                    // `NOT NON_UNIQUE` and `INDEX_NAME = 'PRIMARY'` are MySQL
+                    // boolean expressions, which come back as BIGINT — reading
+                    // them as i8 always errored and left both flags false.
+                    is_unique: r.try_get::<i64, _>(2).map(|v| v != 0).unwrap_or(false),
+                    is_primary: r.try_get::<i64, _>(3).map(|v| v != 0).unwrap_or(false),
                 }
             })
             .collect();
@@ -279,16 +334,8 @@ impl DbConnection for MySqlDriver {
 
     async fn execute_query(&self, sql: &str) -> Result<QueryResult, CoreError> {
         let start = Instant::now();
-        let sql_lower = sql.trim().to_lowercase();
 
-        let is_fetch = sql_lower.starts_with("select")
-            || sql_lower.starts_with("show")
-            || sql_lower.starts_with("explain")
-            || sql_lower.starts_with("with")
-            || sql_lower.starts_with("describe")
-            || sql_lower.starts_with("desc ");
-
-        if is_fetch {
+        if crate::query::statement_returns_rows(sql) {
             let rows = sqlx::query(sql)
                 .fetch_all(&self.pool)
                 .await
@@ -373,5 +420,9 @@ impl DbConnection for MySqlDriver {
             .await
             .map_err(|e| CoreError::Query(e.to_string()))?;
         Ok(row.get::<i64, _>(0))
+    }
+
+    async fn close(&self) {
+        self.pool.close().await;
     }
 }

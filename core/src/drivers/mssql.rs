@@ -217,6 +217,44 @@ fn tiberius_cell_to_row_value(row: &Row, i: usize, col_type: ColumnType) -> RowV
     }
 }
 
+/// Map a tiberius `ColumnType` (a TDS wire tag) to a readable SQL type name
+/// for the result grid header. The grid used to show the raw `{:?}` debug
+/// form (`BigVarChar`, `Intn`, …), which leaked internal tag names.
+fn mssql_type_name(ct: ColumnType) -> &'static str {
+    match ct {
+        ColumnType::Null => "null",
+        ColumnType::Bit | ColumnType::Bitn => "bit",
+        ColumnType::Int1 => "tinyint",
+        ColumnType::Int2 => "smallint",
+        ColumnType::Int4 => "int",
+        ColumnType::Int8 => "bigint",
+        ColumnType::Intn => "int",
+        ColumnType::Float4 => "real",
+        ColumnType::Float8 => "float",
+        ColumnType::Floatn => "float",
+        ColumnType::Money | ColumnType::Money4 => "money",
+        ColumnType::Decimaln | ColumnType::Numericn => "decimal",
+        ColumnType::Guid => "uniqueidentifier",
+        ColumnType::Datetime | ColumnType::Datetime4 | ColumnType::Datetimen => "datetime",
+        ColumnType::Datetime2 => "datetime2",
+        ColumnType::Daten => "date",
+        ColumnType::Timen => "time",
+        ColumnType::DatetimeOffsetn => "datetimeoffset",
+        ColumnType::BigVarChar => "varchar",
+        ColumnType::BigChar => "char",
+        ColumnType::NVarchar => "nvarchar",
+        ColumnType::NChar => "nchar",
+        ColumnType::Text => "text",
+        ColumnType::NText => "ntext",
+        ColumnType::BigVarBin => "varbinary",
+        ColumnType::BigBinary => "binary",
+        ColumnType::Image => "image",
+        ColumnType::Xml => "xml",
+        ColumnType::Udt => "udt",
+        ColumnType::SSVariant => "sql_variant",
+    }
+}
+
 fn tiberius_rows_to_query_result(
     col_names: Vec<String>,
     col_types: Vec<String>,
@@ -388,7 +426,9 @@ impl DbConnection for MssqlDriver {
                 data_type: r.get::<&str, _>(1).unwrap_or("").to_string(),
                 nullable: r.get::<&str, _>(2).unwrap_or("YES") == "YES",
                 default_value: r.get::<&str, _>(3).map(|s| s.to_string()),
-                max_length: r.get::<i64, _>(4),
+                // CHARACTER_MAXIMUM_LENGTH is `int` (i32) on SQL Server;
+                // asking tiberius for i64 always failed → always None.
+                max_length: r.get::<i32, _>(4).map(|v| v as i64),
                 is_primary_key: r.get::<bool, _>(5).unwrap_or(false),
                 enum_values: None,
             })
@@ -439,13 +479,7 @@ impl DbConnection for MssqlDriver {
         let start = Instant::now();
         let mut client = self.get_client().await?;
 
-        let sql_lower = sql.trim().to_lowercase();
-        let is_fetch = sql_lower.starts_with("select")
-            || sql_lower.starts_with("with")
-            || sql_lower.starts_with("exec")
-            || sql_lower.starts_with("explain");
-
-        if is_fetch {
+        if crate::query::statement_returns_rows(sql) {
             let stream = client
                 .simple_query(sql)
                 .await
@@ -458,11 +492,10 @@ impl DbConnection for MssqlDriver {
 
             let elapsed = start.elapsed();
 
-            if let Some(rows) = result_set.into_iter().next() {
-                if rows.is_empty() {
-                    return Ok(QueryResult::from_duration(elapsed));
-                }
-
+            // Skip leading empty result sets (e.g. from a `SET`/`PRINT` before
+            // the real SELECT) instead of blindly taking the first and
+            // reporting no rows.
+            if let Some(rows) = result_set.into_iter().find(|rs| !rs.is_empty()) {
                 let col_names: Vec<String> = rows[0]
                     .columns()
                     .iter()
@@ -471,7 +504,7 @@ impl DbConnection for MssqlDriver {
                 let col_types: Vec<String> = rows[0]
                     .columns()
                     .iter()
-                    .map(|c| format!("{:?}", c.column_type()))
+                    .map(|c| mssql_type_name(c.column_type()).to_string())
                     .collect();
 
                 let data_rows: Vec<Vec<RowValue>> =
@@ -484,12 +517,16 @@ impl DbConnection for MssqlDriver {
                 Ok(QueryResult::from_duration(elapsed))
             }
         } else {
-            client
+            let result = client
                 .execute(sql, &[])
                 .await
                 .map_err(|e| CoreError::Query(e.to_string()))?;
             let elapsed = start.elapsed();
-            Ok(QueryResult::from_duration(elapsed))
+            let mut qr = QueryResult::from_duration(elapsed);
+            // Sum the per-statement counts so the UI can report "N rows
+            // affected" like the pooled engines do.
+            qr.affected_rows = Some(result.rows_affected().iter().sum());
+            Ok(qr)
         }
     }
 

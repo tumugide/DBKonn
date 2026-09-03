@@ -1,7 +1,11 @@
-use std::time::Instant;
+use std::str::FromStr;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use sqlx::{sqlite::SqlitePoolOptions, Column, Row, SqlitePool, TypeInfo, ValueRef};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    Column, Row, SqlitePool, TypeInfo, ValueRef,
+};
 
 use crate::{
     connection::{ConnectionConfig, DbEngine},
@@ -21,10 +25,27 @@ pub struct SqliteDriver {
 
 impl SqliteDriver {
     pub async fn connect(config: &ConnectionConfig) -> Result<Self, CoreError> {
-        let url = config.connection_url();
+        let path = config.file_path.as_deref().unwrap_or(":memory:");
+        let is_memory = path.is_empty() || path == ":memory:";
+
+        // Build options directly instead of formatting `sqlite://{path}` —
+        // a path containing `?`, `#`, spaces, etc. would otherwise be parsed
+        // as URL query/fragment and silently point at the wrong file.
+        let options = if is_memory {
+            SqliteConnectOptions::from_str("sqlite::memory:")
+                .map_err(|e| CoreError::Connection(e.to_string()))?
+        } else {
+            SqliteConnectOptions::new().filename(path)
+        }
+        // Without a busy timeout, any concurrent write returns SQLITE_BUSY
+        // immediately instead of waiting for the lock to clear.
+        .busy_timeout(Duration::from_secs(5));
+
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect(&url)
+            // A `:memory:` database is private to its connection, so a pool of
+            // N connections would be N distinct empty databases. Pin it to 1.
+            .max_connections(if is_memory { 1 } else { 5 })
+            .connect_with(options)
             .await
             .map_err(|e| CoreError::Connection(e.to_string()))?;
         Ok(Self { pool })
@@ -52,9 +73,18 @@ fn sqlite_value_to_row_value(row: &sqlx::sqlite::SqliteRow, idx: usize) -> RowVa
             .try_get::<i64, _>(idx)
             .map(RowValue::Integer)
             .unwrap_or(RowValue::Null),
-        "REAL" | "DOUBLE" | "DOUBLE PRECISION" | "FLOAT" | "NUMERIC" | "DECIMAL" => row
+        "REAL" | "DOUBLE" | "DOUBLE PRECISION" | "FLOAT" => row
             .try_get::<f64, _>(idx)
             .map(RowValue::Float)
+            .unwrap_or(RowValue::Null),
+        // DECIMAL/NUMERIC have no native SQLite type; values may be stored as
+        // TEXT to keep exact precision. Prefer the string form, fall back to
+        // the numeric affinities.
+        "NUMERIC" | "DECIMAL" => row
+            .try_get::<String, _>(idx)
+            .map(RowValue::Text)
+            .or_else(|_| row.try_get::<i64, _>(idx).map(RowValue::Integer))
+            .or_else(|_| row.try_get::<f64, _>(idx).map(RowValue::Float))
             .unwrap_or(RowValue::Null),
         "BLOB" => row
             .try_get::<Vec<u8>, _>(idx)
@@ -243,14 +273,8 @@ impl DbConnection for SqliteDriver {
 
     async fn execute_query(&self, sql: &str) -> Result<QueryResult, CoreError> {
         let start = Instant::now();
-        let sql_lower = sql.trim().to_lowercase();
 
-        let is_fetch = sql_lower.starts_with("select")
-            || sql_lower.starts_with("pragma")
-            || sql_lower.starts_with("explain")
-            || sql_lower.starts_with("with");
-
-        if is_fetch {
+        if crate::query::statement_returns_rows(sql) {
             let rows = sqlx::query(sql)
                 .fetch_all(&self.pool)
                 .await
@@ -258,8 +282,14 @@ impl DbConnection for SqliteDriver {
             let elapsed = start.elapsed();
             Ok(rows_to_query_result(rows, elapsed))
         } else {
-            let result = sqlx::query(sql)
-                .execute(&self.pool)
+            // Run through the *unprepared* executor (`&str`, not
+            // `sqlx::query(...)`). sqlx-sqlite's prepared path executes only
+            // the first statement of a `;`-separated script and silently
+            // ignores the rest; the unprepared path runs the whole batch.
+            use sqlx::Executor;
+            let result = self
+                .pool
+                .execute(sql)
                 .await
                 .map_err(|e| CoreError::Query(e.to_string()))?;
             let elapsed = start.elapsed();
@@ -330,5 +360,9 @@ impl DbConnection for SqliteDriver {
             .await
             .map_err(|e| CoreError::Query(e.to_string()))?;
         Ok(row.get::<i64, _>(0))
+    }
+
+    async fn close(&self) {
+        self.pool.close().await;
     }
 }

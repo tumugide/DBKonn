@@ -84,7 +84,7 @@ fn pg_value_to_row_value(row: &sqlx::postgres::PgRow, idx: usize) -> RowValue {
             .unwrap_or(RowValue::Null),
 
         // ── Arbitrary-precision numeric ──────────────────────────────────────
-        "numeric" | "decimal" | "money" => row
+        "numeric" | "decimal" => row
             .try_get::<rust_decimal::Decimal, _>(idx)
             .map(|d| RowValue::Text(d.to_string()))
             .unwrap_or_else(|_| {
@@ -93,6 +93,20 @@ fn pg_value_to_row_value(row: &sqlx::postgres::PgRow, idx: usize) -> RowValue {
                     .map(RowValue::Float)
                     .unwrap_or(RowValue::Null)
             }),
+
+        // `money` is a distinct 64-bit type: not decode-compatible with
+        // `Decimal` or `f64`, so it used to fall through to NULL. It's an
+        // integer count of the smallest currency unit (cents for 2-digit
+        // locales); render it as a plain decimal string.
+        "money" => row
+            .try_get::<sqlx::postgres::types::PgMoney, _>(idx)
+            .map(|m| {
+                let cents = m.0;
+                let sign = if cents < 0 { "-" } else { "" };
+                let abs = (cents as i128).unsigned_abs();
+                RowValue::Text(format!("{sign}{}.{:02}", abs / 100, abs % 100))
+            })
+            .unwrap_or(RowValue::Null),
 
         // ── Text variants ───────────────────────────────────────────────────
         "text" | "varchar" | "character varying" | "char" | "bpchar"
@@ -421,7 +435,14 @@ impl DbConnection for PgDriver {
                     data_type,
                     nullable: r.get::<String, _>(3) == "YES",
                     default_value: r.try_get::<Option<String>, _>(4).ok().flatten(),
-                    max_length: r.try_get::<Option<i64>, _>(5).ok().flatten(),
+                    // information_schema.character_maximum_length is `integer`
+                    // (i32), not i64 — reading it as i64 always failed and
+                    // max_length came back None for every column.
+                    max_length: r
+                        .try_get::<Option<i32>, _>(5)
+                        .ok()
+                        .flatten()
+                        .map(|v| v as i64),
                     is_primary_key: r.get::<bool, _>(6),
                     enum_values,
                 }
@@ -467,15 +488,8 @@ impl DbConnection for PgDriver {
 
     async fn execute_query(&self, sql: &str) -> Result<QueryResult, CoreError> {
         let start = Instant::now();
-        let sql_lower = sql.trim().to_lowercase();
 
-        let is_fetch = sql_lower.starts_with("select")
-            || sql_lower.starts_with("explain")
-            || sql_lower.starts_with("show")
-            || sql_lower.starts_with("with")
-            || sql_lower.starts_with("table");
-
-        if is_fetch {
+        if crate::query::statement_returns_rows(sql) {
             let rows = sqlx::query(sql)
                 .fetch_all(&self.pool)
                 .await
@@ -560,5 +574,9 @@ impl DbConnection for PgDriver {
             .await
             .map_err(|e| CoreError::Query(e.to_string()))?;
         Ok(row.get::<i64, _>(0))
+    }
+
+    async fn close(&self) {
+        self.pool.close().await;
     }
 }
