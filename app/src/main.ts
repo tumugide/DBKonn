@@ -1,6 +1,6 @@
 import "./styles/global.css";
 import { listen } from "@tauri-apps/api/event";
-import { ipc, type ConnectionConfig, type ColumnInfo } from "./lib/ipc";
+import { ipc, type ConnectionConfig, type ColumnInfo, type IndexInfo } from "./lib/ipc";
 import {
   appState,
   type ThemeType,
@@ -17,6 +17,7 @@ import { SqlEditor } from "./components/SqlEditor";
 import { RecordPanel } from "./components/RecordPanel";
 import { showConnectionModal } from "./components/ConnectionModal";
 import { showCreateDatabaseModal } from "./components/CreateDatabaseModal";
+import { showStructureModal } from "./components/StructureModal";
 import { createExportButton } from "./components/ExportMenu";
 import { showContextMenu } from "./components/ContextMenu";
 import { cloneRowValue, buildDeleteSql } from "./lib/rowEdit";
@@ -990,6 +991,21 @@ function renderTableTabContent(_tab: TableTab) {
     void loadTableData();
   };
 
+  // Latest index metadata for this table (fed by loadTableMetadata) — used
+  // by the Structure modal. describe_table already returns it; it used to be
+  // destructured away and dropped.
+  let lastIndexes: IndexInfo[] = [];
+
+  const structureBtn = document.createElement("button");
+  structureBtn.className = "btn btn-secondary";
+  structureBtn.innerHTML = "⚙ Structure";
+  structureBtn.title = "Show columns & indexes";
+  structureBtn.onclick = () => {
+    const cols = appState.tableMetadata.value;
+    const label = `${schemaForEngine() ? schemaForEngine() + "." : ""}${ac.selectedTable}`;
+    showStructureModal(label, cols, lastIndexes);
+  };
+
   const exportBtn = createExportButton({
     formats: ["csv", "tsv", "xlsx", "json", "markdown", "html", "sql"],
     onSelect: (format) => exportData(format),
@@ -1000,6 +1016,7 @@ function renderTableTabContent(_tab: TableTab) {
   rowInfo.style.cssText = "font-size:11px;color:var(--text-muted);flex:1;";
 
   toolbar.appendChild(refreshBtn);
+  toolbar.appendChild(structureBtn);
   toolbar.appendChild(exportBtn.element);
   toolbar.appendChild(rowInfo);
   tableMain.appendChild(toolbar);
@@ -1138,11 +1155,12 @@ function renderTableTabContent(_tab: TableTab) {
     const ac2 = appState.activeConn.value;
     if (!ac2?.selectedTable) return;
     try {
-      const [columns] = await ipc.describeTable(
+      const [columns, indexes] = await ipc.describeTable(
         ac2.connId,
         schemaForEngine(),
         ac2.selectedTable,
       );
+      lastIndexes = indexes;
       appState.tableMetadata.set(columns);
       recordPanel?.setColumns(columns);
     } catch (e) {
