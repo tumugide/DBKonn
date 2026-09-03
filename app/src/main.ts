@@ -641,6 +641,23 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("focus", startAutoRefresh);
 window.addEventListener("blur", stopAutoRefresh);
 
+// F5 — advertised in the grid toolbar tooltip but previously unhandled.
+// Reloads the active table tab's rows in place, or refreshes the schema
+// tree when the active tab isn't a table.
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "F5" || e.metaKey || e.ctrlKey || e.altKey) return;
+  e.preventDefault();
+  const activeId = appState.activeTab.value;
+  const tab = appState.openTabs.value.find((t) => t.id === activeId);
+  if (tab?.kind === "table" && activeTableReload) {
+    if (!confirmDiscardIfDirty()) return;
+    clearRecordSelection();
+    activeTableReload();
+  } else {
+    void refreshSchemaTree();
+  }
+});
+
 // Disconnects a single connection session — the focused one (from the
 // sidebar "Quit" button) or a background one (from the rail's hover-×) —
 // leaving every other open connection untouched.
@@ -1152,6 +1169,8 @@ function renderTableTabContent(_tab: TableTab) {
     };
 
     rowInfo.textContent = "Loading…";
+    dataGrid?.setLoading(true);
+    appState.tableState.set({ ...s, loading: true });
 
     try {
       const [rows, total] = await Promise.all([
@@ -1176,6 +1195,7 @@ function renderTableTabContent(_tab: TableTab) {
       ]);
 
       if (!isCurrent()) return;
+      dataGrid?.setLoading(false);
 
       if (rows.error) {
         rowInfo.textContent = `Error: ${rows.error}`;
@@ -1212,6 +1232,11 @@ function renderTableTabContent(_tab: TableTab) {
       renderPagination(pagination, total, s.page, s.pageSize);
     } catch (e) {
       rowInfo.textContent = `Error: ${e}`;
+    } finally {
+      if (isCurrent()) {
+        dataGrid?.setLoading(false);
+        appState.tableState.set({ ...appState.tableState.value, loading: false });
+      }
     }
   }
 

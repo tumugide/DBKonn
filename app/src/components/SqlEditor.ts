@@ -682,6 +682,7 @@ export class SqlEditor {
     }
 
     this.setStatus("Running…");
+    this.grid?.setLoading(true);
 
     try {
       const result = await ipc.executeQuery(this.connId, sqlText);
@@ -704,6 +705,8 @@ export class SqlEditor {
     } catch (e) {
       this.setError(String(e));
       this.exportButton?.setDisabled(!this.hasExportableResult());
+    } finally {
+      this.grid?.setLoading(false);
     }
   }
 

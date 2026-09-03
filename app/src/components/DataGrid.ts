@@ -42,11 +42,20 @@ export class DataGrid {
     this.build();
   }
 
+  private overlayEl!: HTMLElement;
+
   private build() {
     this.container.innerHTML = "";
     this.container.style.overflow = "hidden";
     this.container.style.display = "flex";
     this.container.style.flexDirection = "column";
+    this.container.style.position = "relative";
+
+    this.overlayEl = document.createElement("div");
+    this.overlayEl.className = "grid-loading-overlay";
+    this.overlayEl.hidden = true;
+    this.overlayEl.innerHTML = `<div class="grid-spinner"></div>`;
+    this.container.appendChild(this.overlayEl);
 
     this.scrollEl = document.createElement("div");
     this.scrollEl.className = "grid-scroll";
@@ -67,7 +76,12 @@ export class DataGrid {
     this.scrollEl.addEventListener("scroll", () => this.scheduleRender());
   }
 
+  setLoading(loading: boolean) {
+    if (this.overlayEl) this.overlayEl.hidden = !loading;
+  }
+
   setData(result: QueryResult) {
+    this.setLoading(false);
     this.result = result;
     // Silent: row indices from the previous page/sort/filter no longer mean
     // anything once new rows land, but we don't want to also fire
@@ -289,6 +303,7 @@ export class DataGrid {
   }
 
   clear() {
+    this.setLoading(false);
     this.result = undefined;
     this.multiSelect.clear();
     this.thead.innerHTML = "";

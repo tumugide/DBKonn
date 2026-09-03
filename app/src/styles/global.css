@@ -751,6 +751,26 @@ body {
     overflow: auto;
 }
 
+/* ── Grid loading overlay ────────────────────────────────────────────────── */
+.grid-loading-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--bg-base) 55%, transparent);
+    backdrop-filter: blur(1px);
+}
+.grid-spinner {
+    width: 22px;
+    height: 22px;
+    border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: dbkonn-spin 0.7s linear infinite;
+}
+
 /* ── Multi-row selection bulk-action bar ─────────────────────────────────── */
 .selection-bar {
     align-items: center;
