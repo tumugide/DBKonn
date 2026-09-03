@@ -1524,8 +1524,21 @@ function showConnectionsScreen() {
 
 // Raw IPC connect + metadata load — no signal/UI writes. Returns a fresh,
 // unfocused ConnSession with an empty tab strip.
-async function establishConnSession(cfg: ConnectionConfig): Promise<ConnSession> {
-  const connId = await ipc.connectDb(cfg);
+async function establishConnSession(
+  cfg: ConnectionConfig,
+  overrideDatabase?: string,
+): Promise<ConnSession> {
+  // If a specific database is wanted (saved config, or a restored session),
+  // actually connect to it — don't connect to the engine default and just
+  // *display* a different name. That mismatch made the DB dropdown a no-op
+  // (switchDatabase's "already selected" guard) and left the tree empty
+  // because every query hit the wrong database.
+  const effectiveCfg: ConnectionConfig =
+    overrideDatabase && overrideDatabase !== cfg.database
+      ? { ...cfg, database: overrideDatabase }
+      : cfg;
+
+  const connId = await ipc.connectDb(effectiveCfg);
 
   const [databases, schemas] = await Promise.all([
     ipc.listDatabases(connId).catch(() => [] as string[]),
@@ -1540,14 +1553,32 @@ async function establishConnSession(cfg: ConnectionConfig): Promise<ConnSession>
   // table list matches it — same as every later switchSchema() call does.
   const tables = await ipc.listTables(connId, defaultSchema);
 
-  // For engines without a database concept (SQLite), use the config's db name
-  const selectedDb =
-    cfg.database || (databases.length > 0 ? databases[0] : undefined);
+  // The database the connection actually landed on. With no explicit db the
+  // engine picks its own default ("postgres", "mysql", the login default) —
+  // ask it rather than guessing `databases[0]`.
+  let selectedDb = effectiveCfg.database || undefined;
+  if (
+    !selectedDb &&
+    (effectiveCfg.engine === "postgres" || effectiveCfg.engine === "mysql")
+  ) {
+    const dbQuery =
+      effectiveCfg.engine === "postgres"
+        ? "SELECT current_database()"
+        : "SELECT DATABASE()";
+    try {
+      const r = await ipc.executeQuery(connId, dbQuery);
+      const v = r.rows?.[0]?.[0];
+      if (typeof v === "string" && v) selectedDb = v;
+    } catch {
+      /* fall through to the databases[0] guess below */
+    }
+  }
+  if (!selectedDb && databases.length > 0) selectedDb = databases[0];
 
   return {
     id: crypto.randomUUID(),
     connId,
-    config: cfg,
+    config: effectiveCfg,
     databases,
     selectedDatabase: selectedDb,
     schemas,
@@ -1646,10 +1677,9 @@ async function connectToDb(cfg: ConnectionConfig, restoreParam?: StoredConnSessi
   statusDot.className = "status-dot";
 
   try {
-    const session = await establishConnSession(cfg);
+    const session = await establishConnSession(cfg, restore?.selectedDatabase);
 
     if (restore) {
-      session.selectedDatabase = restore.selectedDatabase ?? session.selectedDatabase;
       session.selectedSchema = restore.selectedSchema ?? session.selectedSchema;
       session.openTabs = remapRestoredTabs(restore.tabs, session.connId);
       session.activeTabId =
@@ -1721,8 +1751,7 @@ async function boot() {
 
   const results = await Promise.allSettled(
     restorable.map(async ({ stored: s, cfg }) => {
-      const session = await establishConnSession(cfg);
-      session.selectedDatabase = s.selectedDatabase ?? session.selectedDatabase;
+      const session = await establishConnSession(cfg, s.selectedDatabase);
       session.selectedSchema = s.selectedSchema ?? session.selectedSchema;
       session.openTabs = remapRestoredTabs(s.tabs, session.connId);
       session.activeTabId =
