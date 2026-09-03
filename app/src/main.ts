@@ -192,7 +192,7 @@ function renderSidebar() {
       <div class="sidebar-header connected" style="--conn-color:${ac.config.color ?? avatarColor(ac.config.id)}">
         <span>${esc(ac.config.name)}</span>
         <div class="sidebar-header-actions">
-          <button class="btn-icon" id="sb-refresh-tree" title="Refresh database (schemas & tables)">⟳</button>
+          <button class="btn-icon" id="sb-refresh-tree" title="Refresh database (schemas and tables)" aria-label="Refresh database (schemas and tables)">⟳</button>
           <button class="btn-icon danger" id="sb-disconnect" title="Disconnect">Quit</button>
         </div>
       </div>
