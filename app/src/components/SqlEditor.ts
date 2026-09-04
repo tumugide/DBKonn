@@ -6,12 +6,15 @@ import { autocompletion, completionKeymap } from "@codemirror/autocomplete";
 import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 
-import { ipc, type ConnectionConfig, type ColumnInfo, type QueryResult, type RowValue } from "../lib/ipc";
+import { ipc, type ConnectionConfig, type ColumnInfo, type QueryResult, type RowValue, type SavedQuery } from "../lib/ipc";
 import { appState, type ThemeType } from "../lib/store";
 import { DataGrid } from "./DataGrid";
 import { createExportButton, type ExportButton } from "./ExportMenu";
 import { saveExport, formatMeta, type ExportFormat } from "../lib/export";
 import { splitStatements, statementIndexAt } from "../lib/sqlSplit";
+import { addHistory, getHistory, clearHistory, historyLabel } from "../lib/queryHistory";
+import { openSqlFile, openCsvFile, parseCsv, buildInsertStatements } from "../lib/import";
+import { escapeHtml } from "../lib/escape";
 
 type ThemeConfig = {
   theme: ReturnType<typeof EditorView.theme>;
@@ -457,6 +460,17 @@ export class SqlEditor {
   private unsubTheme?: () => void;
   private exportButton?: ExportButton;
   private stopBtn!: HTMLButtonElement;
+  private explainAnalyzeChk!: HTMLInputElement;
+  private historyBtn!: HTMLButtonElement;
+  private historyEl!: HTMLElement;
+  private historySearchEl!: HTMLInputElement;
+  private historyListEl!: HTMLElement;
+  private savedBtn!: HTMLButtonElement;
+  private savedEl!: HTMLElement;
+  private savedListEl!: HTMLElement;
+  private savedNameEl!: HTMLInputElement;
+  private importBtn!: HTMLButtonElement;
+  private importMenuEl!: HTMLElement;
   /** Monotonic token for the whole run — lets a cancelled run ignore stale
    *  results and a superseded run ignore an older statement's settle. */
   private runToken = 0;
@@ -511,7 +525,7 @@ export class SqlEditor {
   private buildLayout() {
     this.container.innerHTML = "";
     this.container.style.cssText =
-      "display:flex;flex-direction:column;height:100%;overflow:hidden;";
+      "display:flex;flex-direction:column;height:100%;overflow:hidden;position:relative;";
 
     // Toolbar
     const toolbar = document.createElement("div");
@@ -531,6 +545,44 @@ export class SqlEditor {
     this.stopBtn.style.display = "none";
     this.stopBtn.onclick = () => this.cancelRun();
 
+    // EXPLAIN button — runs `EXPLAIN [ANALYZE] <sql>` and shows the raw plan.
+    const explainBtn = document.createElement("button");
+    explainBtn.className = "btn";
+    explainBtn.innerHTML = "EXPLAIN";
+    explainBtn.title = "Show the query plan for the current statement";
+    explainBtn.onclick = () => this.explain();
+
+    this.explainAnalyzeChk = document.createElement("input");
+    this.explainAnalyzeChk.type = "checkbox";
+    this.explainAnalyzeChk.id = "editor-explain-analyze";
+    this.explainAnalyzeChk.title = "Include execution (EXPLAIN ANALYZE)";
+    const analyzeLabel = document.createElement("label");
+    analyzeLabel.htmlFor = "editor-explain-analyze";
+    analyzeLabel.textContent = "Analyze";
+    analyzeLabel.title = "Run EXPLAIN ANALYZE (executes the statement)";
+    analyzeLabel.style.cssText = "font-size:11px;color:var(--text-muted);display:flex;gap:3px;align-items:center;";
+
+    // Query history button — opens a searchable, re-runnable panel.
+    this.historyBtn = document.createElement("button");
+    this.historyBtn.className = "btn";
+    this.historyBtn.innerHTML = "History";
+    this.historyBtn.title = "Search past queries";
+    this.historyBtn.onclick = () => this.toggleHistory();
+
+    // Saved queries / snippets button.
+    this.savedBtn = document.createElement("button");
+    this.savedBtn.className = "btn";
+    this.savedBtn.innerHTML = "Saved";
+    this.savedBtn.title = "Save / load named queries for this connection";
+    this.savedBtn.onclick = () => this.toggleSaved();
+
+    // Import button — runs a `.sql` file or imports a CSV into a table.
+    this.importBtn = document.createElement("button");
+    this.importBtn.className = "btn";
+    this.importBtn.innerHTML = "Import";
+    this.importBtn.title = "Run a .sql file, or import a CSV into a table";
+    this.importBtn.onclick = () => this.toggleImportMenu();
+
     this.statusEl = document.createElement("span");
     this.statusEl.style.cssText =
       "font-size:11px;color:var(--text-muted);flex:1;";
@@ -543,6 +595,12 @@ export class SqlEditor {
 
     toolbar.appendChild(runBtn);
     toolbar.appendChild(this.stopBtn);
+    toolbar.appendChild(explainBtn);
+    toolbar.appendChild(analyzeLabel);
+    analyzeLabel.appendChild(this.explainAnalyzeChk);
+    toolbar.appendChild(this.historyBtn);
+    toolbar.appendChild(this.savedBtn);
+    toolbar.appendChild(this.importBtn);
     toolbar.appendChild(this.statusEl);
     toolbar.appendChild(this.exportButton.element);
 
@@ -583,6 +641,9 @@ export class SqlEditor {
     this.container.appendChild(this.errorEl);
     this.container.appendChild(this.resultContainer);
     this.resultContainer.appendChild(this.resultTabsEl);
+    this.buildHistoryPanel();
+    this.buildSavedPanel();
+    this.buildImportMenu();
 
     this.grid = new DataGrid({
       container: this.resultContainer,
@@ -744,6 +805,7 @@ export class SqlEditor {
         this.activeRequestId = null;
         if (token !== this.runToken) return; // superseded while awaiting
         results.push(result);
+        this.logToHistory(sqlText, !result.error);
         if (result.error && firstError === null) firstError = result.error;
       } catch (e) {
         this.activeRequestId = null;
@@ -753,6 +815,7 @@ export class SqlEditor {
           this.cancelled = true;
           break;
         }
+        this.logToHistory(sqlText, false);
         results.push({
           columns: [],
           rows: [],
@@ -808,6 +871,631 @@ export class SqlEditor {
 
     this.exportButton?.setDisabled(!this.hasExportableResult());
     this.grid?.setLoading(false);
+  }
+
+  /** The engine-appropriate raw-plan preface for `sql`. A plain `EXPLAIN`
+   *  does not execute the statement; `EXPLAIN ANALYZE` does. */
+  private buildExplainSql(sql: string): string {
+    const engine = this.config?.engine ?? "postgres";
+    const analyze = this.explainAnalyzeChk?.checked ?? false;
+    switch (engine) {
+      case "mysql":
+        return analyze ? `EXPLAIN ANALYZE ${sql}` : `EXPLAIN ${sql}`;
+      case "sqlite":
+        return `EXPLAIN QUERY PLAN ${sql}`;
+      case "mssql":
+        // SHOWPLAN converts the statement (and following) into plan output.
+        return `SET SHOWPLAN_ALL ON; ${sql}; SET SHOWPLAN_ALL OFF;`;
+      case "postgres":
+      default:
+        return analyze ? `EXPLAIN ANALYZE ${sql}` : `EXPLAIN ${sql}`;
+    }
+  }
+
+  /** Run `EXPLAIN [ANALYZE]` on the current statement and show the raw plan
+   *  as the result grid (and into the result-tab set, so it's exportable). */
+  private async explain() {
+    if (!this.connId || !this.config) {
+      this.setError("No active connection. Connect first.");
+      return;
+    }
+    const statements = this.planRunStatements();
+    if (statements.length === 0) return;
+    const sqlText = statements[0]!.sql.trim();
+    if (!sqlText) return;
+
+    if (this.config.engine === "mssql") {
+      // SQL Server has no `EXPLAIN` prefix; plan output requires SHOWPLAN
+      // session state that our single-statement execute path doesn't surface.
+      // Point users at the manual equivalent.
+      this.setWarning(
+        "SQL Server has no raw EXPLAIN. To see a plan, run: SET SHOWPLAN_ALL ON; <your query>; SET SHOWPLAN_ALL OFF;",
+      );
+      return;
+    }
+
+    const wrapped = this.buildExplainSql(sqlText);
+    const token = ++this.runToken;
+    this.haltRun = false;
+    this.cancelled = false;
+    this.stopBtn.style.display = "";
+    this.stopBtn.disabled = false;
+
+    this.errorEl.style.display = "none";
+    this.clearWarning();
+    this.setStatus("EXPLAIN…");
+    this.grid?.setLoading(true);
+
+    const requestId = `${this.connId}:${++this.reqSeq}`;
+    this.activeRequestId = requestId;
+    let result: QueryResult;
+    try {
+      result = await ipc.executeQuery(this.connId, wrapped, requestId);
+    } catch (e) {
+      this.activeRequestId = null;
+      if (token !== this.runToken) return;
+      const errMsg = String(e);
+      if (errMsg.toLowerCase().includes("cancelled")) this.cancelled = true;
+      else this.setError(errMsg);
+      this.stopBtn.style.display = "none";
+      this.grid?.setLoading(false);
+      return;
+    }
+    this.activeRequestId = null;
+    if (token !== this.runToken) return;
+
+    this.stopBtn.style.display = "none";
+    this.lastResults = [result];
+    this.lastRunText = wrapped;
+    this.opts.onBeforeNewResult?.();
+    this.refreshResultTabs();
+    this.activeResultIndex = 0;
+    if (result.error) {
+      this.setError(result.error);
+      this.grid?.clear();
+    } else {
+      this.grid?.setData(result);
+      this.setStatus(
+        `Plan: ${result.row_count} rows in ${result.execution_time_ms}ms`,
+      );
+    }
+    this.exportButton?.setDisabled(!this.hasExportableResult());
+    this.grid?.setLoading(false);
+  }
+
+  /** Record one executed statement in durable history. */
+  private logToHistory(sql: string, ok: boolean) {
+    addHistory({
+      connKey: this.connId ?? "",
+      connName: this.config?.name ?? "",
+      sql,
+      ok,
+    });
+  }
+
+  private toggleHistory() {
+    const visible = this.historyEl.style.display !== "none";
+    if (visible) {
+      this.historyEl.style.display = "none";
+      return;
+    }
+    this.historyEl.style.display = "flex";
+    this.renderHistoryList(this.historySearchEl.value);
+    this.historySearchEl.focus();
+  }
+
+  private buildHistoryPanel() {
+    this.historyEl = document.createElement("div");
+    this.historyEl.className = "query-history";
+    this.historyEl.style.cssText = [
+      "position:absolute;",
+      "top:40px;right:8px;",
+      "width:380px;max-width:85%;",
+      "max-height:60%;",
+      "background:var(--bg-surface);",
+      "border:1px solid var(--border-mid);",
+      "border-radius:var(--radius);",
+      "box-shadow:0 8px 30px rgba(0,0,0,0.35);",
+      "display:none;",
+      "flex-direction:column;",
+      "overflow:hidden;",
+      "z-index:50;",
+    ].join("");
+
+    const head = document.createElement("div");
+    head.style.cssText = "display:flex;align-items:center;gap:6px;padding:8px;border-bottom:1px solid var(--border);";
+
+    const title = document.createElement("span");
+    title.textContent = "Query History";
+    title.style.cssText = "font-size:12px;font-weight:600;flex:1;color:var(--text-primary);";
+
+    this.historySearchEl = document.createElement("input");
+    this.historySearchEl.type = "text";
+    this.historySearchEl.placeholder = "Search…";
+    this.historySearchEl.style.cssText = "flex:1;min-width:0;";
+    this.historySearchEl.addEventListener("input", () => {
+      this.renderHistoryList(this.historySearchEl.value);
+    });
+    this.historySearchEl.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") this.historyEl.style.display = "none";
+    });
+
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "btn-icon";
+    clearBtn.innerHTML = "🗑";
+    clearBtn.title = "Clear history";
+    clearBtn.onclick = () => {
+      clearHistory();
+      this.renderHistoryList("");
+    };
+
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "btn-icon";
+    closeBtn.innerHTML = "✕";
+    closeBtn.title = "Close";
+    closeBtn.onclick = () => (this.historyEl.style.display = "none");
+
+    head.appendChild(title);
+    head.appendChild(this.historySearchEl);
+    head.appendChild(clearBtn);
+    head.appendChild(closeBtn);
+
+    this.historyListEl = document.createElement("div");
+    this.historyListEl.style.cssText = "overflow-y:auto;display:flex;flex-direction:column;";
+
+    this.historyEl.appendChild(head);
+    this.historyEl.appendChild(this.historyListEl);
+    this.container.appendChild(this.historyEl);
+  }
+
+  private renderHistoryList(filter: string) {
+    this.historyListEl.textContent = "";
+    const entries = getHistory({
+      connKey: this.connId ?? undefined,
+      text: filter,
+      limit: 200,
+    });
+    if (entries.length === 0) {
+      const empty = document.createElement("div");
+      empty.textContent = filter ? "No matching queries." : "No query history yet.";
+      empty.style.cssText = "padding:20px;text-align:center;color:var(--text-muted);font-size:12px;";
+      this.historyListEl.appendChild(empty);
+      return;
+    }
+    for (const entry of entries) {
+      const row = document.createElement("div");
+      row.className = "query-history-row";
+      row.style.cssText = "padding:7px 10px;border-bottom:1px solid var(--border);cursor:pointer;";
+
+      const top = document.createElement("div");
+      top.style.cssText = "display:flex;align-items:center;gap:6px;";
+      const label = document.createElement("span");
+      label.textContent = historyLabel(entry.sql);
+      label.style.cssText = "flex:1;font-family:var(--font-mono);font-size:12px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+      const okDot = document.createElement("span");
+      okDot.textContent = entry.ok ? "✓" : "✗";
+      okDot.style.cssText = `color:${entry.ok ? "var(--accent)" : "var(--danger, #e5484d)"};font-size:11px;`;
+      top.appendChild(label);
+      top.appendChild(okDot);
+
+      const meta = document.createElement("div");
+      const d = new Date(entry.ts);
+      meta.textContent = `${entry.connName} · ${d.toLocaleTimeString()}`;
+      meta.style.cssText = "font-size:10px;color:var(--text-muted);margin-top:2px;";
+
+      row.onclick = () => {
+        this.loadIntoEditor(entry.sql);
+        this.historyEl.style.display = "none";
+      };
+      row.addEventListener("mousedown", (e) => e.preventDefault());
+      row.onmouseenter = () => (row.style.background = "var(--bg-hover)");
+      row.onmouseleave = () => (row.style.background = "");
+
+      row.appendChild(top);
+      row.appendChild(meta);
+      this.historyListEl.appendChild(row);
+    }
+  }
+
+  /** Load a SQL string into the editor (replacing its doc). */
+  private loadIntoEditor(sql: string) {
+    if (!this.view) return;
+    this.view.dispatch({
+      changes: { from: 0, to: this.view.state.doc.length, insert: sql },
+    });
+    this.view.focus();
+  }
+
+  /** A reasonable default snippet name from the SQL's first line. */
+  private suggestName(): string {
+    const doc = this.getDoc().trim();
+    const line = doc.split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? "";
+    return line.slice(0, 40) || "Untitled query";
+  }
+
+  private toggleSaved() {
+    if (this.savedEl.style.display !== "none") {
+      this.savedEl.style.display = "none";
+      return;
+    }
+    this.savedEl.style.display = "flex";
+    this.savedNameEl.value = this.suggestName();
+    void this.renderSavedList();
+  }
+
+  private buildSavedPanel() {
+    this.savedEl = document.createElement("div");
+    this.savedEl.className = "query-history";
+    this.savedEl.style.cssText = [
+      "position:absolute;",
+      "top:40px;right:8px;",
+      "width:360px;max-width:85%;",
+      "max-height:60%;",
+      "background:var(--bg-surface);",
+      "border:1px solid var(--border-mid);",
+      "border-radius:var(--radius);",
+      "box-shadow:0 8px 30px rgba(0,0,0,0.35);",
+      "display:none;",
+      "flex-direction:column;",
+      "overflow:hidden;",
+      "z-index:51;",
+    ].join("");
+
+    const head = document.createElement("div");
+    head.style.cssText = "display:flex;align-items:center;gap:6px;padding:8px;border-bottom:1px solid var(--border);";
+    const title = document.createElement("span");
+    title.textContent = "Saved Queries";
+    title.style.cssText = "font-size:12px;font-weight:600;flex:1;color:var(--text-primary);";
+    const close = document.createElement("button");
+    close.className = "btn-icon";
+    close.innerHTML = "✕";
+    close.title = "Close";
+    close.onclick = () => (this.savedEl.style.display = "none");
+    head.appendChild(title);
+    head.appendChild(close);
+
+    // Save-current section (name input + Save button).
+    const saveRow = document.createElement("div");
+    saveRow.style.cssText = "display:flex;gap:6px;padding:8px;border-bottom:1px solid var(--border);";
+    this.savedNameEl = document.createElement("input");
+    this.savedNameEl.type = "text";
+    this.savedNameEl.placeholder = "Snippet name";
+    this.savedNameEl.style.cssText = "flex:1;min-width:0;";
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "btn btn-primary";
+    saveBtn.innerHTML = "Save current";
+    saveBtn.title = "Save the editor contents as a named snippet";
+    saveBtn.onclick = () => this.saveCurrentQuery();
+    saveRow.appendChild(this.savedNameEl);
+    saveRow.appendChild(saveBtn);
+
+    this.savedListEl = document.createElement("div");
+    this.savedListEl.style.cssText = "overflow-y:auto;display:flex;flex-direction:column;";
+
+    this.savedEl.appendChild(head);
+    this.savedEl.appendChild(saveRow);
+    this.savedEl.appendChild(this.savedListEl);
+    this.container.appendChild(this.savedEl);
+  }
+
+  private async saveCurrentQuery() {
+    if (!this.connId) {
+      this.setError("No active connection. Connect first.");
+      return;
+    }
+    const name = this.savedNameEl.value.trim();
+    const sql = this.getDoc().trim();
+    if (!name || !sql) {
+      alert("Give the snippet a name and make sure the editor isn't empty.");
+      return;
+    }
+    const now = Date.now();
+    const draft: SavedQuery = {
+      id: `${this.connId}:${name}`,
+      conn_id: this.connId,
+      name,
+      sql,
+      created_at: now,
+      updated_at: now,
+    };
+    try {
+      await ipc.saveSavedQuery(draft);
+      this.savedNameEl.value = this.suggestName();
+      void this.renderSavedList();
+    } catch (e) {
+      alert(`Save failed: ${e}`);
+    }
+  }
+
+  private async renderSavedList() {
+    this.savedListEl.textContent = "";
+    let queries: SavedQuery[];
+    try {
+      queries = await ipc.loadSavedQueries();
+    } catch (e) {
+      const err = document.createElement("div");
+      err.textContent = `Couldn't load saved queries: ${e}`;
+      err.style.cssText = "padding:20px;text-align:center;color:var(--text-muted);font-size:12px;";
+      this.savedListEl.appendChild(err);
+      return;
+    }
+    queries = queries
+      .filter((q) => q.conn_id === this.connId)
+      .sort((a, b) => b.updated_at - a.updated_at);
+
+    if (queries.length === 0) {
+      const empty = document.createElement("div");
+      empty.textContent = "No saved queries for this connection.";
+      empty.style.cssText = "padding:20px;text-align:center;color:var(--text-muted);font-size:12px;";
+      this.savedListEl.appendChild(empty);
+      return;
+    }
+    for (const q of queries) {
+      const row = document.createElement("div");
+      row.className = "query-history-row";
+      row.style.cssText = "padding:7px 10px;border-bottom:1px solid var(--border);cursor:pointer;";
+      const line = document.createElement("div");
+      line.textContent = q.name;
+      line.style.cssText = "font-family:var(--font-mono);font-size:12px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+      const meta = document.createElement("div");
+      meta.textContent = new Date(q.updated_at).toLocaleString();
+      meta.style.cssText = "font-size:10px;color:var(--text-muted);margin-top:2px;";
+
+      row.onclick = () => {
+        this.loadIntoEditor(q.sql);
+        this.savedEl.style.display = "none";
+      };
+      row.onmouseenter = () => (row.style.background = "var(--bg-hover)");
+      row.onmouseleave = () => (row.style.background = "");
+
+      const del = document.createElement("button");
+      del.className = "btn-icon";
+      del.innerHTML = "🗑";
+      del.title = "Delete snippet";
+      del.style.cssText = "position:absolute;right:8px;top:6px;";
+      del.onclick = (e) => {
+        e.stopPropagation();
+        void ipc.deleteSavedQuery(q.id).then(() => this.renderSavedList());
+      };
+
+      row.style.cssText += "position:relative;padding-right:34px;";
+      row.appendChild(line);
+      row.appendChild(meta);
+      row.appendChild(del);
+      this.savedListEl.appendChild(row);
+    }
+  }
+
+  private toggleImportMenu() {
+    const visible = this.importMenuEl.style.display !== "none";
+    if (visible) {
+      this.importMenuEl.style.display = "none";
+      return;
+    }
+    this.importMenuEl.style.display = "block";
+  }
+
+  private buildImportMenu() {
+    this.importMenuEl = document.createElement("div");
+    this.importMenuEl.className = "query-history";
+    this.importMenuEl.style.cssText = [
+      "position:absolute;",
+      "top:40px;right:8px;",
+      "width:230px;",
+      "background:var(--bg-surface);",
+      "border:1px solid var(--border-mid);",
+      "border-radius:var(--radius);",
+      "box-shadow:0 8px 30px rgba(0,0,0,0.35);",
+      "display:none;",
+      "z-index:52;",
+      "overflow:hidden;",
+    ].join("");
+
+    const item = (label: string, title: string, fn: () => void) => {
+      const el = document.createElement("div");
+      el.textContent = label;
+      el.title = title;
+      el.style.cssText = "padding:9px 12px;cursor:pointer;font-size:12px;color:var(--text-primary);";
+      el.onmouseenter = () => (el.style.background = "var(--bg-hover)");
+      el.onmouseleave = () => (el.style.background = "");
+      el.onclick = () => {
+        this.importMenuEl.style.display = "none";
+        fn();
+      };
+      this.importMenuEl.appendChild(el);
+    };
+
+    item("Run .sql file", "Load a .sql file into the editor", () => this.importSqlFile());
+    item("Import CSV into table…", "Map a CSV into an existing table", () => this.showCsvImportModal());
+
+    this.container.appendChild(this.importMenuEl);
+  }
+
+  private async importSqlFile() {
+    const picked = await openSqlFile();
+    if (!picked) return;
+    this.loadIntoEditor(picked.text);
+    this.setStatus(`Loaded ${picked.path}`);
+  }
+
+  /** Modal for importing a CSV into an existing table. */
+  private async showCsvImportModal() {
+    if (!this.connId) {
+      this.setError("No active connection. Connect first.");
+      return;
+    }
+    const picked = await openCsvFile();
+    if (!picked) return;
+    const parsed = parseCsv(picked.text);
+    if (parsed.headers.length === 0 || parsed.rows.length === 0) {
+      alert("That CSV has no usable header row or data rows.");
+      return;
+    }
+
+    // Load the connection's tables for the picker.
+    let tables: { schema?: string; name: string }[];
+    try {
+      const schema = this.config?.engine === "sqlite" ? undefined : "public";
+      const listed = await ipc.listTables(this.connId, schema);
+      tables = listed.map((t) => ({ schema: t.schema, name: t.name }));
+    } catch (e) {
+      alert(`Couldn't load tables: ${e}`);
+      return;
+    }
+
+    this.renderCsvImportModal(picked, parsed, tables);
+  }
+
+  private renderCsvImportModal(
+    picked: { name: string; text: string },
+    parsed: { headers: string[]; rows: string[][] },
+    tables: { schema?: string; name: string }[],
+  ) {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.style.display = "flex";
+
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.style.cssText = "width:640px;max-width:92vw;max-height:85vh;display:flex;flex-direction:column;";
+
+    const title = document.createElement("h2");
+    title.className = "modal-title";
+    title.style.cssText = "margin:0;";
+    title.textContent = `Import CSV · ${picked.name}`;
+
+    // Target table picker.
+    const tableRow = document.createElement("div");
+    tableRow.style.cssText = "padding:10px 16px;display:flex;gap:8px;align-items:center;";
+    const tableLabel = document.createElement("label");
+    tableLabel.textContent = "Into table:";
+    tableLabel.style.cssText = "font-size:12px;color:var(--text-muted);";
+    const tableSel = document.createElement("select");
+    tableSel.style.cssText = "flex:1;min-width:0;";
+    tableSel.innerHTML = tables.map((t) => `<option value="${escapeHtml(t.name)}">${escapeHtml((t.schema ? t.schema + "." : "") + t.name)}</option>`).join("");
+    tableRow.appendChild(tableLabel);
+    tableRow.appendChild(tableSel);
+
+    // Preview (first few rows).
+    const preview = document.createElement("div");
+    preview.style.cssText = "flex:1;overflow:auto;padding:0 16px 8px;";
+    const pRow = document.createElement("div");
+    pRow.style.cssText = "font-size:12px;color:var(--text-muted);margin-bottom:6px;";
+    pRow.textContent = `${parsed.rows.length} data row(s) · ${parsed.headers.length} column(s). Choose a target table — columns are matched by name; unmatched source columns are ignored, unmatched table columns are left NULL.`;
+    preview.appendChild(pRow);
+    const pTbl = document.createElement("table");
+    pTbl.style.cssText = "border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("thead");
+    const htr = document.createElement("tr");
+    for (const h of parsed.headers) {
+      const th = document.createElement("th");
+      th.textContent = h;
+      th.style.cssText = "border:1px solid var(--border);padding:3px 6px;";
+      htr.appendChild(th);
+    }
+    thead.appendChild(htr);
+    const tbody = document.createElement("tbody");
+    for (const row of parsed.rows.slice(0, 8)) {
+      const tr = document.createElement("tr");
+      for (const cell of row) {
+        const td = document.createElement("td");
+        td.textContent = cell;
+        td.style.cssText = "border:1px solid var(--border);padding:3px 6px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    pTbl.appendChild(thead);
+    pTbl.appendChild(tbody);
+    preview.appendChild(pTbl);
+
+    const foot = document.createElement("div");
+    foot.className = "modal-actions";
+    const cancel = document.createElement("button");
+    cancel.className = "btn";
+    cancel.textContent = "Cancel";
+    cancel.onclick = () => overlay.remove();
+    const run = document.createElement("button");
+    run.className = "btn btn-primary";
+    run.textContent = "Import";
+    run.onclick = async () => {
+      const table = tables[tableSel.selectedIndex]!;
+      run.disabled = true;
+      run.textContent = "Importing…";
+      try {
+        const target = await this.runCsvImport(table.schema, table.name, parsed);
+        overlay.remove();
+        this.setStatus(`Imported ${target} row(s) from ${picked.name}`);
+        void this.run();
+      } catch (e) {
+        run.disabled = false;
+        run.textContent = "Import";
+        alert(`Import failed: ${e}`);
+      }
+    };
+    foot.appendChild(cancel);
+    foot.appendChild(run);
+
+    modal.appendChild(title);
+    modal.appendChild(tableRow);
+    modal.appendChild(preview);
+    modal.appendChild(foot);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+    tableSel.focus();
+  }
+
+  /** Read the target table's columns, map CSV headers to them, and run
+   *  batched multi-row INSERTs. Returns the number of rows imported. */
+  private async runCsvImport(
+    schema: string | undefined,
+    table: string,
+    parsed: { headers: string[]; rows: string[][] },
+  ): Promise<number> {
+    if (!this.connId) throw new Error("No active connection.");
+    const [cols] = await ipc.describeTable(this.connId, schema, table);
+    const colNames = cols.map((c) => c.name);
+    // Map each CSV header to a matching target column (case-insensitive).
+    const headerIndex = parsed.headers.map((h) => {
+      const match = colNames.findIndex((c) => c.toLowerCase() === h.toLowerCase());
+      return match >= 0 ? match : -1;
+    });
+
+    const usedTargets: string[] = [];
+    const srcIdxOf: number[] = [];
+    headerIndex.forEach((m, si) => {
+      if (m >= 0) {
+        usedTargets.push(colNames[m]!);
+        srcIdxOf.push(si);
+      }
+    });
+    if (usedTargets.length === 0) {
+      throw new Error(
+        "None of the CSV column names matched the target table's columns.\n" +
+          `CSV: ${parsed.headers.join(", ")}\nTable: ${colNames.join(", ")}`,
+      );
+    }
+
+    const engine = this.config?.engine ?? "postgres";
+    const statements = buildInsertStatements(
+      engine,
+      table,
+      usedTargets,
+      parsed.rows,
+      100,
+      srcIdxOf,
+    );
+    let imported = 0;
+    for (const stmt of statements) {
+      const requestId = `${this.connId}:${++this.reqSeq}`;
+      const result = await ipc.executeQuery(this.connId, stmt, requestId);
+      if (result.error) throw new Error(result.error);
+      imported += result.affected_rows ?? 0;
+    }
+    return imported;
   }
 
   /** Abort the in-flight statement and ask the run loop to stop. */

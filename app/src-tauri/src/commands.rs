@@ -3,7 +3,7 @@ use std::sync::Arc;
 use dbkonn_core::{
     connection::ConnectionConfig,
     drivers::{self, DbConnection},
-    query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, SchemaInfo, TableInfo},
+    query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, SavedQuery, SchemaInfo, TableInfo},
     validator,
 };
 use tauri::State;
@@ -336,6 +336,39 @@ pub async fn in_transaction(
 ) -> Result<bool, String> {
     let driver = driver_for(&state, &conn_id).await?;
     Ok(driver.in_transaction().await)
+}
+
+// ── Saved queries / snippets ──────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn save_saved_query(mut query: SavedQuery) -> Result<String, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let mut list = crate::saved_queries::load_saved_queries()?;
+    if let Some(pos) = list.iter().position(|q| q.id == query.id) {
+        query.updated_at = now;
+        list[pos] = query.clone();
+    } else {
+        query.created_at = now;
+        query.updated_at = now;
+        list.push(query.clone());
+    }
+    crate::saved_queries::save_saved_queries(&list)?;
+    Ok(query.id)
+}
+
+#[tauri::command]
+pub async fn load_saved_queries() -> Result<Vec<SavedQuery>, String> {
+    crate::saved_queries::load_saved_queries()
+}
+
+#[tauri::command]
+pub async fn delete_saved_query(id: String) -> Result<(), String> {
+    let mut list = crate::saved_queries::load_saved_queries()?;
+    list.retain(|q| q.id != id);
+    crate::saved_queries::save_saved_queries(&list)
 }
 
 // ── Menu sync ──────────────────────────────────────────────────────────────────

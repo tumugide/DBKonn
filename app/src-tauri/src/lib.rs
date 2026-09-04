@@ -1,5 +1,6 @@
 mod commands;
 mod connections;
+mod saved_queries;
 mod state;
 mod updater;
 
@@ -141,6 +142,9 @@ pub fn run() {
             commands::commit_transaction,
             commands::rollback_transaction,
             commands::in_transaction,
+            commands::save_saved_query,
+            commands::load_saved_queries,
+            commands::delete_saved_query,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]

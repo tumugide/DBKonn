@@ -72,6 +72,15 @@ export interface ParseError {
   col?: number;
 }
 
+export interface SavedQuery {
+  id: string;
+  conn_id: string;
+  name: string;
+  sql: string;
+  created_at: number;
+  updated_at: number;
+}
+
 // ── IPC calls ─────────────────────────────────────────────────────────────────
 
 /** Default ceiling for a browse/metadata round-trip. Generous — this is a
@@ -134,6 +143,10 @@ export const ipc = {
   saveConnection:      (config: ConnectionConfig)                               => invoke<string>("save_connection", { config }),
   loadConnections:     ()                                                       => invoke<ConnectionConfig[]>("load_connections"),
   deleteConnection:    (connId: string)                                         => invoke<void>("delete_connection", { connId }),
+
+  saveSavedQuery:      (query: SavedQuery)                                      => invoke<string>("save_saved_query", { query }),
+  loadSavedQueries:    ()                                                       => invoke<SavedQuery[]>("load_saved_queries"),
+  deleteSavedQuery:    (id: string)                                             => invoke<void>("delete_saved_query", { id }),
 
   syncThemeMenu:       (theme: string)                                          => invoke<void>("sync_theme_menu", { theme }),
   syncQueryMenu:       (tabs: { id: string; title: string }[], activeTabId: string | null) =>
