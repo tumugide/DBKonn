@@ -1081,9 +1081,20 @@ function renderTableTabContent(_tab: TableTab) {
   rowInfo.id = "row-info";
   rowInfo.style.cssText = "font-size:11px;color:var(--text-muted);flex:1;";
 
+  const newRowBtn = document.createElement("button");
+  newRowBtn.className = "btn btn-secondary";
+  newRowBtn.innerHTML = "+ New Row";
+  newRowBtn.title = "Insert a new row";
+  newRowBtn.onclick = () => {
+    if (!confirmDiscardIfDirty()) return;
+    clearRecordSelection();
+    openInsertPanel();
+  };
+
   toolbar.appendChild(refreshBtn);
   toolbar.appendChild(structureBtn);
   toolbar.appendChild(exportBtn.element);
+  toolbar.appendChild(newRowBtn);
   toolbar.appendChild(rowInfo);
   tableMain.appendChild(toolbar);
 
@@ -1229,6 +1240,24 @@ function renderTableTabContent(_tab: TableTab) {
     dataGrid?.setSelectedRow(rowIndex);
     recordPanelEl.classList.add("open");
     recordPanel?.show(record);
+  }
+
+  function openInsertPanel() {
+    const columns = appState.tableMetadata.value;
+    if (columns.length === 0) return;
+
+    // Build a draft row: use default_value if present, otherwise null
+    const draft: RowValue[] = columns.map((col) => {
+      if (col.default_value) {
+        // Return null so the DB applies the default — the buildInsertSql
+        // function will skip columns with defaults when the value is null.
+        return null;
+      }
+      return null;
+    });
+
+    recordPanelEl.classList.add("open");
+    recordPanel?.showInsert(draft);
   }
 
   async function loadTableMetadata() {
