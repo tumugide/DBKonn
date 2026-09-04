@@ -113,6 +113,9 @@ app.innerHTML = `
   <div class="status-bar">
     <div class="status-dot" id="status-dot"></div>
     <span id="status-text">Ready</span>
+    <span id="txn-controls" style="margin-left:8px;display:none;">
+      <button id="txn-btn" class="btn btn-secondary" style="font-size:10px;padding:1px 6px;">Begin Txn</button>
+    </span>
     <span id="theme-label" style="margin-left:auto;cursor:pointer;color:var(--text-muted);" title="Click to change theme"></span>
   </div>
 `;
@@ -125,9 +128,83 @@ const statusText = document.getElementById("status-text")!;
 const statusDot = document.getElementById("status-dot")!;
 const themeLabel = document.getElementById("theme-label")!;
 const tabStripEl = document.getElementById("table-tabs-list")!;
+const txnControls = document.getElementById("txn-controls")!;
+const txnBtn = document.getElementById("txn-btn") as HTMLButtonElement;
 
 appState.status.subscribe((s) => {
   statusText.textContent = s;
+});
+
+// ── Transaction controls ───────────────────────────────────────────────────────
+// Show/hide the transaction button based on whether a connection is active.
+// The button toggles between "Begin Txn" → "Commit" / "Rollback".
+function syncTxnControls() {
+  const ac = appState.activeConn.value;
+  const inTxn = appState.transactionActive.value;
+  if (!ac) {
+    txnControls.style.display = "none";
+    return;
+  }
+  txnControls.style.display = "";
+  if (inTxn) {
+    txnBtn.textContent = "Commit";
+    txnBtn.className = "btn btn-primary";
+    txnBtn.title = "Commit transaction";
+  } else {
+    txnBtn.textContent = "Begin Txn";
+    txnBtn.className = "btn btn-secondary";
+    txnBtn.title = "Begin transaction";
+  }
+}
+
+txnBtn.onclick = async () => {
+  const ac = appState.activeConn.value;
+  if (!ac) return;
+  try {
+    if (appState.transactionActive.value) {
+      await ipc.commitTransaction(ac.connId);
+      appState.transactionActive.set(false);
+      appState.status.set("Transaction committed");
+    } else {
+      await ipc.beginTransaction(ac.connId);
+      appState.transactionActive.set(true);
+      appState.status.set("Transaction started");
+    }
+  } catch (e) {
+    appState.status.set(`Transaction error: ${e}`);
+  }
+  syncTxnControls();
+};
+
+// Add a Rollback button that appears when a transaction is active.
+const rollbackBtn = document.createElement("button");
+rollbackBtn.className = "btn btn-danger";
+rollbackBtn.style.cssText = "font-size:10px;padding:1px 6px;margin-left:4px;display:none;";
+rollbackBtn.textContent = "Rollback";
+rollbackBtn.title = "Rollback transaction";
+rollbackBtn.onclick = async () => {
+  const ac = appState.activeConn.value;
+  if (!ac) return;
+  try {
+    await ipc.rollbackTransaction(ac.connId);
+    appState.transactionActive.set(false);
+    appState.status.set("Transaction rolled back");
+  } catch (e) {
+    appState.status.set(`Rollback error: ${e}`);
+  }
+  syncTxnControls();
+};
+txnControls.appendChild(rollbackBtn);
+
+appState.transactionActive.subscribe((active) => {
+  rollbackBtn.style.display = active ? "" : "none";
+  syncTxnControls();
+});
+
+appState.activeConn.subscribe(() => {
+  // Reset transaction state on connection switch; re-check with the backend.
+  appState.transactionActive.set(false);
+  syncTxnControls();
 });
 
 // ── Theme: apply on boot, listen for changes ──────────────────────────────────

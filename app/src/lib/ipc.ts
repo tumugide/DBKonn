@@ -137,4 +137,9 @@ export const ipc = {
   syncThemeMenu:       (theme: string)                                          => invoke<void>("sync_theme_menu", { theme }),
   syncQueryMenu:       (tabs: { id: string; title: string }[], activeTabId: string | null) =>
                          invoke<void>("sync_query_menu", { tabs, activeTabId }),
+
+  beginTransaction:    (connId: string)                                         => invoke<void>("begin_transaction", { connId }),
+  commitTransaction:   (connId: string)                                         => invoke<void>("commit_transaction", { connId }),
+  rollbackTransaction: (connId: string)                                         => invoke<void>("rollback_transaction", { connId }),
+  inTransaction:       (connId: string)                                         => invoke<boolean>("in_transaction", { connId }),
 };
