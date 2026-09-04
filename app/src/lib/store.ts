@@ -172,6 +172,8 @@ export const appState = {
   tableMetadata: new Signal<ColumnInfo[]>([]),
   selectedRecord: new Signal<SelectedRecord | null>(null),
   status: new Signal<string>("Ready"),
+  /** True when the focused connection has an active transaction. */
+  transactionActive: new Signal<boolean>(false),
   // The focused session's tab strip — mirrored into connSessions (see below).
   openTabs: new Signal<AppTab[]>([]),
   activeTab: new Signal<string | null>(null),

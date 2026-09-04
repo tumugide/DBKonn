@@ -136,6 +136,10 @@ pub fn run() {
             commands::delete_connection,
             commands::sync_theme_menu,
             commands::sync_query_menu,
+            commands::begin_transaction,
+            commands::commit_transaction,
+            commands::rollback_transaction,
+            commands::in_transaction,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]

@@ -792,6 +792,13 @@ body {
     background: color-mix(in srgb, var(--bg-base) 55%, transparent);
     backdrop-filter: blur(1px);
 }
+/* `hidden` on its own can't hide this: the UA's `[hidden] { display: none }`
+   is an author-overridable declaration, and the `display: flex` above beats
+   it — so setLoading(false) had no visual effect and the spinner sat over the
+   grid forever. Re-assert the hide at higher specificity. */
+.grid-loading-overlay[hidden] {
+    display: none;
+}
 .grid-spinner {
     width: 22px;
     height: 22px;

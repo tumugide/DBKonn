@@ -261,6 +261,44 @@ pub async fn delete_connection(
     Ok(())
 }
 
+// ── Transaction management ─────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn begin_transaction(
+    state: State<'_, AppState>,
+    conn_id: String,
+) -> Result<(), String> {
+    let driver = driver_for(&state, &conn_id).await?;
+    driver.begin_transaction().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn commit_transaction(
+    state: State<'_, AppState>,
+    conn_id: String,
+) -> Result<(), String> {
+    let driver = driver_for(&state, &conn_id).await?;
+    driver.commit_transaction().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn rollback_transaction(
+    state: State<'_, AppState>,
+    conn_id: String,
+) -> Result<(), String> {
+    let driver = driver_for(&state, &conn_id).await?;
+    driver.rollback_transaction().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn in_transaction(
+    state: State<'_, AppState>,
+    conn_id: String,
+) -> Result<bool, String> {
+    let driver = driver_for(&state, &conn_id).await?;
+    Ok(driver.in_transaction().await)
+}
+
 // ── Menu sync ──────────────────────────────────────────────────────────────────
 
 /// Keeps the native "Theme" menu's check marks in sync with the theme

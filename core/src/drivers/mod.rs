@@ -59,6 +59,30 @@ pub trait DbConnection: Send + Sync {
     /// connections are released promptly on disconnect rather than lingering
     /// until the handle is dropped. Default: no-op (for poolless drivers).
     async fn close(&self) {}
+
+    /// Begin a transaction on this connection. Subsequent `execute_query` calls
+    /// will run inside the transaction until `commit_transaction` or
+    /// `rollback_transaction` is called.
+    async fn begin_transaction(&self) -> Result<(), CoreError> {
+        Err(CoreError::Unsupported(
+            "Transactions are not supported for this driver".into(),
+        ))
+    }
+
+    /// Commit the active transaction.
+    async fn commit_transaction(&self) -> Result<(), CoreError> {
+        Err(CoreError::Driver("No active transaction".into()))
+    }
+
+    /// Roll back the active transaction.
+    async fn rollback_transaction(&self) -> Result<(), CoreError> {
+        Err(CoreError::Driver("No active transaction".into()))
+    }
+
+    /// Returns true if a transaction is currently active on this connection.
+    async fn in_transaction(&self) -> bool {
+        false
+    }
 }
 
 /// Validates a user-supplied database name before it's interpolated into a

@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use sqlx::{mysql::MySqlPoolOptions, Column, MySqlPool, Row, TypeInfo, ValueRef};
+use tokio::sync::Mutex as TokioMutex;
 
 use crate::{
     connection::{ConnectionConfig, DbEngine},
@@ -18,6 +19,7 @@ const ENGINE: DbEngine = DbEngine::MySQL;
 pub struct MySqlDriver {
     pool: MySqlPool,
     database: String,
+    txn: TokioMutex<Option<sqlx::Transaction<'static, sqlx::MySql>>>,
 }
 
 impl MySqlDriver {
@@ -29,7 +31,11 @@ impl MySqlDriver {
             .await
             .map_err(|e| CoreError::Connection(e.to_string()))?;
         let database = config.database.clone().unwrap_or_default();
-        Ok(Self { pool, database })
+        Ok(Self {
+            pool,
+            database,
+            txn: TokioMutex::new(None),
+        })
     }
 }
 
@@ -345,23 +351,52 @@ impl DbConnection for MySqlDriver {
     async fn execute_query(&self, sql: &str) -> Result<QueryResult, CoreError> {
         let start = Instant::now();
 
-        if crate::query::statement_returns_rows(sql) {
-            let rows = sqlx::query(sql)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| CoreError::Query(e.to_string()))?;
-            let elapsed = start.elapsed();
-            Ok(rows_to_query_result(rows, elapsed))
-        } else {
-            let result = sqlx::query(sql)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| CoreError::Query(e.to_string()))?;
+        let mut txn_guard = self.txn.lock().await;
+        let has_txn = txn_guard.is_some();
+
+        macro_rules! run_fetch {
+            ($executor:expr) => {{
+                sqlx::query(sql)
+                    .fetch_all($executor)
+                    .await
+                    .map_err(|e| CoreError::Query(e.to_string()))?
+            }};
+        }
+        macro_rules! run_execute {
+            ($executor:expr) => {{
+                sqlx::query(sql)
+                    .execute($executor)
+                    .await
+                    .map_err(|e| CoreError::Query(e.to_string()))?
+            }};
+        }
+
+        let result = if crate::query::statement_returns_rows(sql) {
+            if has_txn {
+                let rows = run_fetch!(&mut **txn_guard.as_mut().unwrap());
+                let elapsed = start.elapsed();
+                rows_to_query_result(rows, elapsed)
+            } else {
+                let rows = run_fetch!(&self.pool);
+                let elapsed = start.elapsed();
+                rows_to_query_result(rows, elapsed)
+            }
+        } else if has_txn {
+            let exec_result = run_execute!(&mut **txn_guard.as_mut().unwrap());
             let elapsed = start.elapsed();
             let mut qr = QueryResult::from_duration(elapsed);
-            qr.affected_rows = Some(result.rows_affected());
-            Ok(qr)
-        }
+            qr.affected_rows = Some(exec_result.rows_affected());
+            qr
+        } else {
+            let exec_result = run_execute!(&self.pool);
+            let elapsed = start.elapsed();
+            let mut qr = QueryResult::from_duration(elapsed);
+            qr.affected_rows = Some(exec_result.rows_affected());
+            qr
+        };
+
+        drop(txn_guard);
+        Ok(result)
     }
 
     async fn fetch_table_rows(
@@ -433,6 +468,54 @@ impl DbConnection for MySqlDriver {
     }
 
     async fn close(&self) {
+        {
+            let mut txn_guard = self.txn.lock().await;
+            if let Some(txn) = txn_guard.take() {
+                let _ = txn.rollback().await;
+            }
+        }
         self.pool.close().await;
+    }
+
+    async fn begin_transaction(&self) -> Result<(), CoreError> {
+        let mut txn_guard = self.txn.lock().await;
+        if txn_guard.is_some() {
+            return Err(CoreError::Driver(
+                "A transaction is already active".into(),
+            ));
+        }
+        let txn = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| CoreError::Query(e.to_string()))?;
+        *txn_guard = Some(txn);
+        Ok(())
+    }
+
+    async fn commit_transaction(&self) -> Result<(), CoreError> {
+        let mut txn_guard = self.txn.lock().await;
+        let txn = txn_guard
+            .take()
+            .ok_or_else(|| CoreError::Driver("No active transaction".into()))?;
+        txn.commit()
+            .await
+            .map_err(|e| CoreError::Query(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn rollback_transaction(&self) -> Result<(), CoreError> {
+        let mut txn_guard = self.txn.lock().await;
+        let txn = txn_guard
+            .take()
+            .ok_or_else(|| CoreError::Driver("No active transaction".into()))?;
+        txn.rollback()
+            .await
+            .map_err(|e| CoreError::Query(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn in_transaction(&self) -> bool {
+        self.txn.lock().await.is_some()
     }
 }

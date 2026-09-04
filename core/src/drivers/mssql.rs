@@ -3,6 +3,7 @@ use std::time::Instant;
 use async_trait::async_trait;
 use tiberius::{AuthMethod, Client, ColumnType, Config, FromSql, Row};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex as TokioMutex;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 use crate::{
@@ -17,9 +18,14 @@ use super::DbConnection;
 
 const ENGINE: DbEngine = DbEngine::MSSQL;
 
+type MssqlClient = Client<tokio_util::compat::Compat<TcpStream>>;
+
 pub struct MssqlDriver {
     config: tiberius::Config,
     database: String,
+    /// Held client for transaction mode. When active, all queries run through
+    /// this persistent connection instead of opening fresh ones.
+    txn_client: TokioMutex<Option<MssqlClient>>,
 }
 
 impl MssqlDriver {
@@ -70,6 +76,7 @@ impl MssqlDriver {
         Ok(Self {
             config: tib_config,
             database: config.database.clone().unwrap_or_default(),
+            txn_client: TokioMutex::new(None),
         })
     }
 
@@ -477,25 +484,38 @@ impl DbConnection for MssqlDriver {
 
     async fn execute_query(&self, sql: &str) -> Result<QueryResult, CoreError> {
         let start = Instant::now();
-        let mut client = self.get_client().await?;
 
-        if crate::query::statement_returns_rows(sql) {
-            let stream = client
-                .simple_query(sql)
-                .await
-                .map_err(|e| CoreError::Query(e.to_string()))?;
+        // In transaction mode, use the held client; otherwise open a fresh
+        // connection per call (the existing no-pool behavior).
+        let mut txn_guard = self.txn_client.lock().await;
+        let has_txn = txn_guard.is_some();
 
-            let result_set = stream
-                .into_results()
-                .await
-                .map_err(|e| CoreError::Query(e.to_string()))?;
+        let result = if crate::query::statement_returns_rows(sql) {
+            let result_sets = if has_txn {
+                let client = txn_guard.as_mut().unwrap();
+                let stream = client
+                    .simple_query(sql)
+                    .await
+                    .map_err(|e| CoreError::Query(e.to_string()))?;
+                stream
+                    .into_results()
+                    .await
+                    .map_err(|e| CoreError::Query(e.to_string()))?
+            } else {
+                drop(txn_guard);
+                let mut client = self.get_client().await?;
+                let stream = client
+                    .simple_query(sql)
+                    .await
+                    .map_err(|e| CoreError::Query(e.to_string()))?;
+                stream
+                    .into_results()
+                    .await
+                    .map_err(|e| CoreError::Query(e.to_string()))?
+            };
 
             let elapsed = start.elapsed();
-
-            // Skip leading empty result sets (e.g. from a `SET`/`PRINT` before
-            // the real SELECT) instead of blindly taking the first and
-            // reporting no rows.
-            if let Some(rows) = result_set.into_iter().find(|rs| !rs.is_empty()) {
+            if let Some(rows) = result_sets.into_iter().find(|rs| !rs.is_empty()) {
                 let col_names: Vec<String> = rows[0]
                     .columns()
                     .iter()
@@ -506,28 +526,38 @@ impl DbConnection for MssqlDriver {
                     .iter()
                     .map(|c| mssql_type_name(c.column_type()).to_string())
                     .collect();
-
                 let data_rows: Vec<Vec<RowValue>> =
                     rows.iter().map(tiberius_row_to_values).collect();
-
                 Ok(tiberius_rows_to_query_result(
                     col_names, col_types, data_rows, elapsed,
                 ))
             } else {
                 Ok(QueryResult::from_duration(elapsed))
             }
-        } else {
-            let result = client
+        } else if has_txn {
+            let client = txn_guard.as_mut().unwrap();
+            let exec_result = client
                 .execute(sql, &[])
                 .await
                 .map_err(|e| CoreError::Query(e.to_string()))?;
             let elapsed = start.elapsed();
             let mut qr = QueryResult::from_duration(elapsed);
-            // Sum the per-statement counts so the UI can report "N rows
-            // affected" like the pooled engines do.
-            qr.affected_rows = Some(result.rows_affected().iter().sum());
+            qr.affected_rows = Some(exec_result.rows_affected().iter().sum());
             Ok(qr)
-        }
+        } else {
+            drop(txn_guard);
+            let mut client = self.get_client().await?;
+            let exec_result = client
+                .execute(sql, &[])
+                .await
+                .map_err(|e| CoreError::Query(e.to_string()))?;
+            let elapsed = start.elapsed();
+            let mut qr = QueryResult::from_duration(elapsed);
+            qr.affected_rows = Some(exec_result.rows_affected().iter().sum());
+            Ok(qr)
+        };
+
+        result
     }
 
     async fn fetch_table_rows(
@@ -601,5 +631,53 @@ impl DbConnection for MssqlDriver {
             }
         }
         Ok(0)
+    }
+
+    async fn begin_transaction(&self) -> Result<(), CoreError> {
+        let mut txn_guard = self.txn_client.lock().await;
+        if txn_guard.is_some() {
+            return Err(CoreError::Driver(
+                "A transaction is already active".into(),
+            ));
+        }
+        let mut client = self.get_client().await?;
+        client
+            .simple_query("BEGIN TRANSACTION")
+            .await
+            .map_err(|e| CoreError::Query(e.to_string()))?;
+        // Consume any result set from BEGIN (MSSQL may return a DONE token).
+        let _ = client.simple_query("").await;
+        *txn_guard = Some(client);
+        Ok(())
+    }
+
+    async fn commit_transaction(&self) -> Result<(), CoreError> {
+        let mut txn_guard = self.txn_client.lock().await;
+        let mut client = txn_guard
+            .take()
+            .ok_or_else(|| CoreError::Driver("No active transaction".into()))?;
+        client
+            .simple_query("COMMIT TRANSACTION")
+            .await
+            .map_err(|e| CoreError::Query(e.to_string()))?;
+        let _ = client.simple_query("").await;
+        Ok(())
+    }
+
+    async fn rollback_transaction(&self) -> Result<(), CoreError> {
+        let mut txn_guard = self.txn_client.lock().await;
+        let mut client = txn_guard
+            .take()
+            .ok_or_else(|| CoreError::Driver("No active transaction".into()))?;
+        client
+            .simple_query("ROLLBACK TRANSACTION")
+            .await
+            .map_err(|e| CoreError::Query(e.to_string()))?;
+        let _ = client.simple_query("").await;
+        Ok(())
+    }
+
+    async fn in_transaction(&self) -> bool {
+        self.txn_client.lock().await.is_some()
     }
 }
