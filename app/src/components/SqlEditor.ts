@@ -11,6 +11,7 @@ import { appState, type ThemeType } from "../lib/store";
 import { DataGrid } from "./DataGrid";
 import { createExportButton, type ExportButton } from "./ExportMenu";
 import { saveExport, formatMeta, type ExportFormat } from "../lib/export";
+import { splitStatements, statementIndexAt } from "../lib/sqlSplit";
 
 type ThemeConfig = {
   theme: ReturnType<typeof EditorView.theme>;
@@ -430,6 +431,8 @@ const DIALECT_MAP = {
 export interface SqlEditorOptions {
   initialDoc?: string;
   initialResult?: QueryResult | null;
+  /** Initial result sets, one per statement (used on tab restore). */
+  initialResults?: QueryResult[];
   onRowClick?: (row: RowValue[], rowIndex: number, columns: ColumnInfo[]) => void;
   /** Called just before a fresh result set replaces the current one. */
   onBeforeNewResult?: () => void;
@@ -442,12 +445,14 @@ export class SqlEditor {
   private connId?: string;
   private grid?: DataGrid;
   private resultContainer!: HTMLElement;
+  private resultTabsEl!: HTMLElement;
   private statusEl!: HTMLElement;
   private errorEl!: HTMLElement;
   private warnEl!: HTMLElement;
   private lastDoc = "SELECT 1;\n";
-  private lastResult: QueryResult | null = null;
+  private lastResults: QueryResult[] = [];
   private lastRunText = "";
+  private activeResultIndex = 0;
   private opts: SqlEditorOptions;
   private unsubTheme?: () => void;
   private exportButton?: ExportButton;
@@ -456,7 +461,7 @@ export class SqlEditor {
     this.container = container;
     this.opts = opts;
     if (opts.initialDoc) this.lastDoc = opts.initialDoc;
-    this.lastResult = opts.initialResult ?? null;
+    this.lastResults = opts.initialResults ?? (opts.initialResult ? [opts.initialResult] : []);
     this.buildLayout();
     this.unsubTheme = appState.theme.subscribe(() => {
       const parent = this.view?.dom.parentElement;
@@ -470,7 +475,12 @@ export class SqlEditor {
   }
 
   getLastResult(): QueryResult | null {
-    return this.lastResult;
+    return this.lastResults[0] ?? null;
+  }
+
+  /** All result sets from the most recent run, in statement order. */
+  getResults(): QueryResult[] {
+    return this.lastResults;
   }
 
   /** The SQL text that produced the current results (may differ from the
@@ -539,27 +549,32 @@ export class SqlEditor {
       "flex-direction:column;",
     ].join("");
 
+    // Result tabs (only visible when a run produced more than one statement)
+    this.resultTabsEl = document.createElement("div");
+    this.resultTabsEl.className = "result-tabs";
+    this.resultTabsEl.style.display = "none";
+
     this.container.appendChild(toolbar);
     this.container.appendChild(editorPane);
     this.container.appendChild(this.warnEl);
     this.container.appendChild(this.errorEl);
     this.container.appendChild(this.resultContainer);
+    this.resultContainer.appendChild(this.resultTabsEl);
 
     this.grid = new DataGrid({
       container: this.resultContainer,
       onHeaderClick: () => {},
       onRowClick: (row, rowIndex) => {
         this.grid?.setSelectedRow(rowIndex);
-        this.opts.onRowClick?.(row, rowIndex, this.lastResult?.columns ?? []);
+        const active = this.lastResults[this.activeResultIndex];
+        this.opts.onRowClick?.(row, rowIndex, active?.columns ?? []);
       },
     });
-    if (this.lastResult) {
-      this.grid.setData(this.lastResult);
-      const label =
-        this.lastResult.affected_rows !== undefined
-          ? `${this.lastResult.affected_rows} rows affected`
-          : `${this.lastResult.row_count} rows returned`;
-      this.statusEl.textContent = `${label} in ${this.lastResult.execution_time_ms}ms`;
+
+    this.refreshResultTabs();
+    if (this.lastResults.length > 0) {
+      const idx = Math.min(this.activeResultIndex, this.lastResults.length - 1);
+      this.showResultAtIndex(idx);
     }
     this.buildEditor(editorPane, "postgres");
   }
@@ -657,15 +672,16 @@ export class SqlEditor {
       return;
     }
 
-    const sqlText = this.getSelectedOrAll();
-    if (!sqlText.trim()) return;
+    const statements = this.planRunStatements();
+    if (statements.length === 0) return;
 
     this.errorEl.style.display = "none";
     this.clearWarning();
     this.setStatus("Validating…");
 
+    const joined = statements.map((s) => s.sql.trim()).filter(Boolean).join(";\n");
     try {
-      const parseErr = await ipc.validateSql(this.config, sqlText);
+      const parseErr = await ipc.validateSql(this.config, joined);
       if (parseErr) {
         // Advisory only — the local parser doesn't cover every dialect
         // construct, so a "parse error" here is often a false positive.
@@ -684,39 +700,138 @@ export class SqlEditor {
     this.setStatus("Running…");
     this.grid?.setLoading(true);
 
-    try {
-      const result = await ipc.executeQuery(this.connId, sqlText);
-      this.lastResult = result;
-      this.lastRunText = sqlText;
-      this.opts.onBeforeNewResult?.();
+    const results: QueryResult[] = [];
+    let firstError: string | null = null;
 
-      if (result.error) {
-        this.setError(result.error);
-        this.grid?.clear();
-      } else {
-        this.grid?.setData(result);
-        const label =
-          result.affected_rows !== undefined
-            ? `${result.affected_rows} rows affected`
-            : `${result.row_count} rows returned`;
-        this.setStatus(`${label} in ${result.execution_time_ms}ms`);
+    for (const stmt of statements) {
+      const sqlText = stmt.sql.trim();
+      if (!sqlText) continue;
+
+      try {
+        const result = await ipc.executeQuery(this.connId, sqlText);
+        results.push(result);
+        if (result.error && firstError === null) firstError = result.error;
+      } catch (e) {
+        results.push({
+          columns: [],
+          rows: [],
+          row_count: 0,
+          execution_time_ms: 0,
+          error: String(e),
+        });
+        if (firstError === null) firstError = String(e);
+        // A thrown/DB error aborts the remaining statements (they depend on
+        // the failed one in most real scripts).
+        break;
       }
-      this.exportButton?.setDisabled(!this.hasExportableResult());
-    } catch (e) {
-      this.setError(String(e));
-      this.exportButton?.setDisabled(!this.hasExportableResult());
-    } finally {
-      this.grid?.setLoading(false);
+    }
+
+    this.lastResults = results;
+    this.lastRunText = statements.map((s) => s.sql.trim()).filter(Boolean).join(";\n");
+    this.opts.onBeforeNewResult?.();
+
+    this.refreshResultTabs();
+    this.activeResultIndex = 0;
+    if (results.length > 0) {
+      this.showResultAtIndex(0);
+    } else {
+      this.grid?.clear();
+    }
+
+    if (firstError) {
+      this.setError(firstError);
+    } else if (results.length > 0) {
+      const totalMs = results.reduce((a, r) => a + (r.execution_time_ms ?? 0), 0);
+      const totalRows = results.reduce(
+        (a, r) => a + (r.affected_rows !== undefined ? r.affected_rows : r.row_count),
+        0,
+      );
+      this.setStatus(
+        `${results.length} statement${results.length > 1 ? "s" : ""} · ${totalRows} rows in ${totalMs}ms`,
+      );
+    } else {
+      this.setStatus("No statements to run");
+    }
+
+    this.exportButton?.setDisabled(!this.hasExportableResult());
+    this.grid?.setLoading(false);
+  }
+
+  /** Decide what to run: a selection overrides everything; otherwise if the
+   *  cursor is inside a statement with no multi-statement intent, run that
+   *  statement; otherwise run the whole script. */
+  private planRunStatements(): { sql: string }[] {
+    if (!this.view) return [];
+    const { state } = this.view;
+    const sel = state.selection.main;
+    if (sel.from !== sel.to) {
+      const text = state.sliceDoc(sel.from, sel.to);
+      return text.trim() ? [{ sql: text }] : [];
+    }
+    const full = state.doc.toString();
+    const idx = statementIndexAt(full, sel.to);
+    const stmts = splitStatements(full);
+    if (idx >= 0 && stmts.length > 1) {
+      // Single statement under cursor, but only when the script really is
+      // multi-statement — running one statement of a single-statement script
+      // is just running the script.
+      return [{ sql: stmts[idx]!.sql }];
+    }
+    return stmts.map((s) => ({ sql: s.sql }));
+  }
+
+  private refreshResultTabs() {
+    this.resultTabsEl.textContent = "";
+    if (this.lastResults.length <= 1) {
+      this.resultTabsEl.style.display = "none";
+      return;
+    }
+    this.resultTabsEl.style.display = "";
+    this.lastResults.forEach((r, i) => {
+      const tab = document.createElement("button");
+      tab.className = "result-tab";
+      if (i === this.activeResultIndex) tab.classList.add("active");
+      const label =
+        r.error
+          ? "error"
+          : r.affected_rows !== undefined
+            ? `${r.affected_rows} rows affected`
+            : `${r.row_count} rows`;
+      const kind = r.columns.length > 0 ? "▦" : r.affected_rows !== undefined ? "✓" : "…";
+      tab.textContent = `${kind} ${i + 1} · ${label}`;
+      tab.title = `Result ${i + 1}`;
+      tab.onclick = () => {
+        this.showResultAtIndex(i);
+      };
+      this.resultTabsEl.appendChild(tab);
+    });
+  }
+
+  private showResultAtIndex(index: number) {
+    this.activeResultIndex = index;
+    const r = this.lastResults[index];
+    if (!r) {
+      this.grid?.clear();
+      return;
+    }
+    // Update active tab styling
+    const tabs = this.resultTabsEl.querySelectorAll<HTMLButtonElement>(".result-tab");
+    tabs.forEach((t, i) => t.classList.toggle("active", i === index));
+    if (r.error) {
+      this.grid?.clear();
+    } else {
+      this.grid?.setData(r);
     }
   }
 
   private hasExportableResult(): boolean {
-    return !!this.lastResult && !this.lastResult.error && this.lastResult.columns.length > 0;
+    const r = this.lastResults[this.activeResultIndex];
+    return !!r && !r.error && r.columns.length > 0;
   }
 
   private async exportResult(format: ExportFormat) {
     if (!this.hasExportableResult()) return;
-    const result = this.lastResult!;
+    const result = this.lastResults[this.activeResultIndex]!;
     try {
       await saveExport(
         format,
@@ -729,15 +844,6 @@ export class SqlEditor {
     } catch (e) {
       alert(`Export failed: ${e}`);
     }
-  }
-
-  private getSelectedOrAll(): string {
-    if (!this.view) return "";
-    const { state } = this.view;
-    const sel = state.selection.main;
-    return sel.from !== sel.to
-      ? state.sliceDoc(sel.from, sel.to)
-      : state.doc.toString();
   }
 
   private setStatus(msg: string) {

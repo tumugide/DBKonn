@@ -1041,7 +1041,7 @@ function renderQueryTabContent(tab: QueryTab) {
 
   sqlEditor = new SqlEditor(wrap, {
     initialDoc: tab.sqlDoc,
-    initialResult: tab.sqlResult,
+    initialResults: tab.sqlResults,
     onBeforeNewResult: () => {
       recordPanelEl.classList.remove("open");
       queryRecordPanel.clear();
@@ -1849,7 +1849,12 @@ async function establishConnSession(
 }
 
 function remapRestoredTabs(tabs: AppTab[], connId: string): AppTab[] {
-  return tabs.map((t) => ({ ...t, connId }));
+  return tabs.map((t) => {
+    if (t.kind === "query") {
+      return { ...t, connId, sqlResults: t.sqlResults ?? [] };
+    }
+    return { ...t, connId };
+  });
 }
 
 // "Connected: <name>" for engines with no database concept (SQLite), or
@@ -2130,6 +2135,7 @@ function persistCurrentTabState() {
       ...tab,
       sqlDoc: sqlEditor?.getDoc() ?? tab.sqlDoc,
       sqlResult: sqlEditor?.getLastResult() ?? tab.sqlResult,
+      sqlResults: sqlEditor?.getResults() ?? tab.sqlResults,
     };
   }
 
@@ -2511,6 +2517,7 @@ function openQueryTab() {
     connId: ac.connId,
     sqlDoc: "SELECT 1;\n",
     sqlResult: null,
+    sqlResults: [],
   };
 
   appState.openTabs.set([...appState.openTabs.value, tab]);

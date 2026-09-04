@@ -121,7 +121,11 @@ export interface QueryTab {
   connId: string;
   // Per-tab state — preserved when switching between tabs
   sqlDoc: string;
+  /** Primary result (first statement) — kept for read/back-compat and the
+   *  record panel, which only describes a single result set. */
   sqlResult: QueryResult | null;
+  /** One result set per executed statement, in order. */
+  sqlResults: QueryResult[];
 }
 
 export type AppTab = TableTab | QueryTab;

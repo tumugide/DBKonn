@@ -1025,6 +1025,38 @@ table.data-grid td.json-cell {
     gap: 8px;
 }
 
+/* Result tabs — one per statement in a multi-statement script run */
+.result-tabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px 6px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    flex-shrink: 0;
+}
+.result-tab {
+    padding: 3px 10px;
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-family: var(--font-family);
+    cursor: pointer;
+    white-space: nowrap;
+    border: none;
+}
+.result-tab:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+.result-tab.active {
+    background: var(--accent);
+    color: var(--accent-contrast, #fff);
+}
+
+
 /* CodeMirror overrides — the editor itself stays monospace, like a code editor */
 .cm-editor {
     height: 100%;
