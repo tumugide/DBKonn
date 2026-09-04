@@ -456,6 +456,20 @@ export class SqlEditor {
   private opts: SqlEditorOptions;
   private unsubTheme?: () => void;
   private exportButton?: ExportButton;
+  private stopBtn!: HTMLButtonElement;
+  /** Monotonic token for the whole run — lets a cancelled run ignore stale
+   *  results and a superseded run ignore an older statement's settle. */
+  private runToken = 0;
+  /** Monotonic per-statement request id passed to the backend so Stop can
+   *  abort the in-flight statement. */
+  private reqSeq = 0;
+  /** Set when the user hits Stop; the run loop stops after the statement
+   *  that's in flight returns. */
+  private haltRun = false;
+  /** True when the current run was cancelled by Stop (surfaces "Cancelled"). */
+  private cancelled = false;
+  /** Request id of the statement currently awaiting the backend (if any). */
+  private activeRequestId: string | null = null;
 
   constructor(container: HTMLElement, opts: SqlEditorOptions = {}) {
     this.container = container;
@@ -509,6 +523,14 @@ export class SqlEditor {
     runBtn.title = "Run query (⌘⏎)";
     runBtn.onclick = () => this.run();
 
+    // Stop button — only relevant while a query is in flight.
+    this.stopBtn = document.createElement("button");
+    this.stopBtn.className = "btn";
+    this.stopBtn.innerHTML = "■ Stop";
+    this.stopBtn.title = "Cancel the running query";
+    this.stopBtn.style.display = "none";
+    this.stopBtn.onclick = () => this.cancelRun();
+
     this.statusEl = document.createElement("span");
     this.statusEl.style.cssText =
       "font-size:11px;color:var(--text-muted);flex:1;";
@@ -520,6 +542,7 @@ export class SqlEditor {
     this.exportButton.setDisabled(!this.hasExportableResult());
 
     toolbar.appendChild(runBtn);
+    toolbar.appendChild(this.stopBtn);
     toolbar.appendChild(this.statusEl);
     toolbar.appendChild(this.exportButton.element);
 
@@ -675,6 +698,12 @@ export class SqlEditor {
     const statements = this.planRunStatements();
     if (statements.length === 0) return;
 
+    const token = ++this.runToken;
+    this.haltRun = false;
+    this.cancelled = false;
+    this.stopBtn.style.display = "";
+    this.stopBtn.disabled = false;
+
     this.errorEl.style.display = "none";
     this.clearWarning();
     this.setStatus("Validating…");
@@ -682,6 +711,7 @@ export class SqlEditor {
     const joined = statements.map((s) => s.sql.trim()).filter(Boolean).join(";\n");
     try {
       const parseErr = await ipc.validateSql(this.config, joined);
+      if (token !== this.runToken) return; // superseded while validating
       if (parseErr) {
         // Advisory only — the local parser doesn't cover every dialect
         // construct, so a "parse error" here is often a false positive.
@@ -707,27 +737,47 @@ export class SqlEditor {
       const sqlText = stmt.sql.trim();
       if (!sqlText) continue;
 
+      const requestId = `${this.connId}:${++this.reqSeq}`;
+      this.activeRequestId = requestId;
       try {
-        const result = await ipc.executeQuery(this.connId, sqlText);
+        const result = await ipc.executeQuery(this.connId, sqlText, requestId);
+        this.activeRequestId = null;
+        if (token !== this.runToken) return; // superseded while awaiting
         results.push(result);
         if (result.error && firstError === null) firstError = result.error;
       } catch (e) {
+        this.activeRequestId = null;
+        if (token !== this.runToken) return; // superseded
+        const errMsg = String(e);
+        if (errMsg.toLowerCase().includes("cancelled")) {
+          this.cancelled = true;
+          break;
+        }
         results.push({
           columns: [],
           rows: [],
           row_count: 0,
           execution_time_ms: 0,
-          error: String(e),
+          error: errMsg,
         });
-        if (firstError === null) firstError = String(e);
-        // A thrown/DB error aborts the remaining statements (they depend on
-        // the failed one in most real scripts).
-        break;
+        if (firstError === null) firstError = errMsg;
+        break; // a thrown/DB error aborts the remaining statements
       }
+
+      // Stop pressed while the previous statement completed — stop the run.
+      if (this.haltRun) break;
     }
+    this.activeRequestId = null;
+
+    this.stopBtn.style.display = "none";
+
+    if (token !== this.runToken) return; // a newer run took over
 
     this.lastResults = results;
-    this.lastRunText = statements.map((s) => s.sql.trim()).filter(Boolean).join(";\n");
+    this.lastRunText = statements
+      .map((s) => s.sql.trim())
+      .filter(Boolean)
+      .join(";\n");
     this.opts.onBeforeNewResult?.();
 
     this.refreshResultTabs();
@@ -738,7 +788,10 @@ export class SqlEditor {
       this.grid?.clear();
     }
 
-    if (firstError) {
+    if (this.cancelled) {
+      this.setStatus("Cancelled");
+      this.errorEl.style.display = "none";
+    } else if (firstError) {
       this.setError(firstError);
     } else if (results.length > 0) {
       const totalMs = results.reduce((a, r) => a + (r.execution_time_ms ?? 0), 0);
@@ -755,6 +808,19 @@ export class SqlEditor {
 
     this.exportButton?.setDisabled(!this.hasExportableResult());
     this.grid?.setLoading(false);
+  }
+
+  /** Abort the in-flight statement and ask the run loop to stop. */
+  private cancelRun() {
+    this.stopBtn.disabled = true;
+    this.haltRun = true;
+    this.cancelled = true;
+    this.setStatus("Stopping…");
+    if (this.activeRequestId) {
+      const id = this.activeRequestId;
+      this.activeRequestId = null;
+      void ipc.cancelQuery(id).catch(() => {});
+    }
   }
 
   /** Decide what to run: a selection overrides everything; otherwise if the

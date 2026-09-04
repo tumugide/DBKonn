@@ -121,7 +121,8 @@ export const ipc = {
   listTables:          (connId: string, schema?: string)                        => invoke<TableInfo[]>("list_tables", { connId, schema }),
   describeTable:       (connId: string, schema: string|undefined, table: string) => withTimeout(invoke<[ColumnInfo[], IndexInfo[]]>("describe_table", { connId, schema, table }), `describe ${table}`),
 
-  executeQuery:        (connId: string, sql: string)                            => invoke<QueryResult>("execute_query", { connId, sql }),
+  executeQuery:        (connId: string, sql: string, requestId: string)          => invoke<QueryResult>("execute_query", { connId, sql, requestId }),
+  cancelQuery:         (requestId: string)                                        => invoke<void>("cancel_query", { requestId }),
   fetchTableRows:      (connId: string, schema: string|undefined, table: string, page: PageRequest, whereClause?: string) =>
                          withTimeout(invoke<QueryResult>("fetch_table_rows", { connId, schema, table, page, whereClause }), `fetch ${table}`),
   countRows:           (connId: string, schema: string|undefined, table: string, whereClause?: string) =>

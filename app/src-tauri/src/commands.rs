@@ -151,14 +151,53 @@ pub async fn describe_table(
 
 // ── Query execution ───────────────────────────────────────────────────────────
 
+/// Execute a single SQL statement and return its result. The DB round-trip is
+/// run on a spawned task keyed by `request_id`, so the frontend's Stop button
+/// can abort it mid-flight (see `cancel_query`). Spawning also makes the
+/// cancellation clean for the pool-backed drivers: dropping the task drops the
+/// sqlx future, which abandons the server socket and returns the pooled
+/// connection (sqlx revalidates it on the next checkout).
 #[tauri::command]
 pub async fn execute_query(
     state: State<'_, AppState>,
     conn_id: String,
     sql: String,
+    request_id: String,
 ) -> Result<QueryResult, String> {
     let driver = driver_for(&state, &conn_id).await?;
-    driver.execute_query(&sql).await.map_err(|e| e.to_string())
+
+    // Run the DB round-trip on a spawned task keyed by `request_id`, so the
+    // frontend's Stop button can abort it mid-flight (see `cancel_query`).
+    // The task sends its result back over a oneshot channel; aborting the
+    // task drops the channel sender, which resolves our `rx.await` with an
+    // error we report as "Query cancelled". Spawning + aborting the task is
+    // also what makes cancellation clean for the pool-backed drivers
+    // (pg/mysql/sqlite): dropping the task drops the sqlx future, abandoning
+    // the server socket and returning the pooled connection (sqlx revalidates
+    // it on the next checkout).
+    let driver = driver.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let handle = tokio::spawn(async move {
+        let result = driver.execute_query(&sql).await;
+        let _ = tx.send(result);
+    });
+    state.queries.lock().unwrap().insert(request_id.clone(), handle);
+
+    match rx.await {
+        Ok(Ok(r)) => Ok(r),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err("Query cancelled".to_string()),
+    }
+}
+
+/// Abort an in-flight query by request id (best-effort — no-op if it already
+/// completed). The spawned task's DB future is dropped, cutting the wait.
+#[tauri::command]
+pub fn cancel_query(state: State<'_, AppState>, request_id: String) -> Result<(), String> {
+    if let Some(handle) = state.queries.lock().unwrap().remove(&request_id) {
+        handle.abort();
+    }
+    Ok(())
 }
 
 #[tauri::command]
