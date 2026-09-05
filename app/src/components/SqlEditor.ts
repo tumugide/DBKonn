@@ -1335,8 +1335,9 @@ export class SqlEditor {
     // Load the connection's tables for the picker.
     let tables: { schema?: string; name: string }[];
     try {
-      const schema = this.config?.engine === "sqlite" ? undefined : "public";
-      const listed = await ipc.listTables(this.connId, schema);
+      // Call list_tables without a schema — each driver returns its
+      // default set of tables (PG public, MySQL current DB, MSSQL dbo, etc.).
+      const listed = await ipc.listTables(this.connId);
       tables = listed.map((t) => ({ schema: t.schema, name: t.name }));
     } catch (e) {
       alert(`Couldn't load tables: ${e}`);

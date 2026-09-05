@@ -103,6 +103,34 @@ export function showConnectionModal(
               <option value="disable" ${initial.ssl_mode === "disable" ? "selected" : ""}>Disable</option>
             </select>
           </div>
+
+          <details class="form-row">
+            <summary style="cursor:pointer;font-size:12px;color:var(--text-muted);user-select:none">Advanced TLS…</summary>
+            <div style="margin-top:8px;display:grid;gap:8px;">
+              <div>
+                <label>CA Certificate Path (PEM)</label>
+                <input id="cm-tls-ca" type="text" value="${esc(initial.tls?.ca_cert_path ?? "")}"
+                       placeholder="/path/to/ca.pem" style="width:100%" />
+              </div>
+              <div>
+                <label>Client Certificate Path (PEM)</label>
+                <input id="cm-tls-cert" type="text" value="${esc(initial.tls?.client_cert_path ?? "")}"
+                       placeholder="/path/to/client-cert.pem" style="width:100%" />
+              </div>
+              <div>
+                <label>Client Key Path (PEM)</label>
+                <input id="cm-tls-key" type="text" value="${esc(initial.tls?.client_key_path ?? "")}"
+                       placeholder="/path/to/client-key.pem" style="width:100%" />
+              </div>
+              <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
+                <input id="cm-tls-verify" type="checkbox" ${initial.tls?.verify_hostname ? "checked" : ""} />
+                Verify hostname (verify-full)
+              </label>
+              <div style="font-size:11px;color:var(--text-muted)">
+                Only applied when SSL Mode is <b>Require</b>. Client certificates are not supported for SQL Server connections.
+              </div>
+            </div>
+          </details>
         </div>
 
         <div id="cm-sqlite-fields" style="display:none">
@@ -179,6 +207,10 @@ export function showConnectionModal(
         overlay.querySelector<HTMLInputElement>("#cm-pass")!.value = parsed.password ?? "";
         overlay.querySelector<HTMLInputElement>("#cm-db")!.value = parsed.database ?? "";
         overlay.querySelector<HTMLSelectElement>("#cm-ssl")!.value = parsed.ssl_mode;
+        overlay.querySelector<HTMLInputElement>("#cm-tls-ca")!.value = parsed.tls?.ca_cert_path ?? "";
+        overlay.querySelector<HTMLInputElement>("#cm-tls-cert")!.value = parsed.tls?.client_cert_path ?? "";
+        overlay.querySelector<HTMLInputElement>("#cm-tls-key")!.value = parsed.tls?.client_key_path ?? "";
+        overlay.querySelector<HTMLInputElement>("#cm-tls-verify")!.checked = parsed.tls?.verify_hostname ?? false;
       }
       setStatus("URL parsed — review fields below", "color:var(--accent-green)");
     } catch (e) {
@@ -216,7 +248,24 @@ export function showConnectionModal(
       ssl_mode: isSqlite
         ? "disable"
         : (overlay.querySelector<HTMLSelectElement>("#cm-ssl")!.value as any),
+      tls: isSqlite
+        ? undefined
+        : buildTlsConfig(overlay),
       color: selectedColor,
+    };
+  }
+
+  function buildTlsConfig(root: HTMLElement): ConnectionConfig["tls"] {
+    const ca = root.querySelector<HTMLInputElement>("#cm-tls-ca")!.value.trim();
+    const cert = root.querySelector<HTMLInputElement>("#cm-tls-cert")!.value.trim();
+    const key = root.querySelector<HTMLInputElement>("#cm-tls-key")!.value.trim();
+    const verify = root.querySelector<HTMLInputElement>("#cm-tls-verify")!.checked;
+    if (!ca && !cert && !key && !verify) return undefined;
+    return {
+      ca_cert_path: ca || undefined,
+      client_cert_path: cert || undefined,
+      client_key_path: key || undefined,
+      verify_hostname: verify,
     };
   }
 

@@ -5,6 +5,17 @@ import { invoke } from "@tauri-apps/api/core";
 export type DbEngine = "postgres" | "mysql" | "sqlite" | "mssql";
 export type SslMode  = "prefer"   | "require" | "disable";
 
+export interface TlsConfig {
+  /** Path to a PEM CA certificate to trust instead of the OS root store. */
+  ca_cert_path?: string;
+  /** Path to a PEM client certificate (paired with client_key_path). */
+  client_cert_path?: string;
+  /** Path to the PEM client private key. */
+  client_key_path?: string;
+  /** Verify the server hostname matches the certificate (verify-full). */
+  verify_hostname: boolean;
+}
+
 export interface ConnectionConfig {
   id: string;
   name: string;
@@ -16,6 +27,8 @@ export interface ConnectionConfig {
   database?: string;
   file_path?: string;
   ssl_mode: SslMode;
+  /** Optional richer TLS options (CA path, client cert, verify-full). */
+  tls?: TlsConfig;
   /** User-assigned color tag (hex, e.g. "#e06c75") for telling connections apart at a glance */
   color?: string;
 }

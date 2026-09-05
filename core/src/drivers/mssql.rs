@@ -53,14 +53,39 @@ impl MssqlDriver {
             SslMode::Require => tiberius::EncryptionLevel::Required,
         });
 
-        // Only skip certificate verification when the user has NOT asked for
-        // authenticated transport. On "Require" we keep tiberius's default
-        // trust (the OS root store) so a man-in-the-middle presenting a
-        // self-signed cert is rejected instead of silently accepted.
-        // Support for a user-supplied CA / client cert is a follow-up.
-        match config.ssl_mode {
-            SslMode::Disable | SslMode::Prefer => tib_config.trust_cert(),
-            SslMode::Require => {}
+        // Certificate trust:
+        //  - Disable / Prefer: keep the existing behavior — skip certificate
+        //    verification entirely (Prefer/Disable are not authenticated
+        //    transport anyway).
+        //  - Require with a user CA path: verify the server against that CA
+        //    file via `trust_cert_ca`.
+        //  - Require without a CA path: verify against the OS root store
+        //    (no `trust_cert()`), so a MITM presenting a self-signed cert is
+        //    rejected instead of silently accepted. This pins down A2.
+        if let Some(ca) = config
+            .tls
+            .as_ref()
+            .and_then(|t| t.ca_cert_path.as_deref())
+            .filter(|_| config.ssl_mode == SslMode::Require)
+        {
+            tib_config.trust_cert_ca(ca);
+        } else {
+            match config.ssl_mode {
+                SslMode::Disable | SslMode::Prefer => tib_config.trust_cert(),
+                SslMode::Require => {}
+            }
+        }
+
+        // tiberius's rustls backend has no client-certificate support. If the
+        // user configured one for an MSSQL connection, refuse the connect with
+        // a clear error rather than silently ignoring the mutual-TLS request.
+        if let Some(t) = &config.tls {
+            if t.client_cert_path.is_some() || t.client_key_path.is_some() {
+                return Err(CoreError::Connection(
+                    "MSSQL connections do not support client certificates (mutual TLS) yet."
+                        .to_string(),
+                ));
+            }
         }
 
         // Test connect to ensure credentials are valid
