@@ -567,8 +567,11 @@ mod tests {
             color: None,
         };
         let url = cfg.connection_url();
-        assert!(url.contains("ssl-mode=VERIFY_CA"), "url: {url}");
-        assert!(url.contains("ssl-ca="), "url: {url}");
+        assert!(
+            url.contains("ssl-mode=VERIFY_CA"),
+            "expected URL to contain ssl-mode=VERIFY_CA"
+        );
+        assert!(url.contains("ssl-ca="), "expected URL to contain ssl-ca=");
     }
 
     #[test]
