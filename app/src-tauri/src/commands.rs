@@ -181,7 +181,13 @@ pub async fn execute_query(
         let result = driver.execute_query(&sql).await;
         let _ = tx.send(result);
     });
-    state.queries.lock().unwrap().insert(request_id.clone(), handle);
+    {
+        let mut queries = state.queries.lock().unwrap();
+        if queries.contains_key(&request_id) {
+            return Err(format!("Duplicate request id: {request_id}"));
+        }
+        queries.insert(request_id.clone(), handle);
+    }
 
     match rx.await {
         Ok(Ok(r)) => Ok(r),
