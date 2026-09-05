@@ -73,8 +73,12 @@ export function splitStatements(source: string): SqlStatement[] {
     if (isLineComment) {
       if (ch === "\n") {
         isLineComment = false;
-        runStart = i + 1;
-        stmtStart = -1;
+        // Only a *leading* comment (before any statement text) advances the
+        // segment start. A comment in the middle of a statement — e.g.
+        // `SELECT 1 -- note\n, 2;` — must leave the statement bounds intact.
+        if (stmtStart < 0) {
+          runStart = i + 1;
+        }
       }
       i += 1;
       continue;
@@ -96,9 +100,16 @@ export function splitStatements(source: string): SqlStatement[] {
       continue;
     }
     if (ch === "#") {
-      isLineComment = true;
-      i += 1;
-      continue;
+      // MySQL-style `#` comments only — and only when `#` starts a line, so a
+      // Postgres bitwise/JSON operator (`#`, `#>`, `#>>`, `#-`) mid-statement
+      // isn't mistaken for a comment and used to swallow the rest of the line.
+      let j = i - 1;
+      while (j >= 0 && source[j] !== "\n" && /\s/.test(source[j]!)) j -= 1;
+      if (j < 0 || source[j] === "\n") {
+        isLineComment = true;
+        i += 1;
+        continue;
+      }
     }
     if (ch === "/" && next === "*") {
       inBlockComment = true;
@@ -133,10 +144,12 @@ export function splitStatements(source: string): SqlStatement[] {
  */
 export function statementIndexAt(source: string, offset: number): number {
   const stmts = splitStatements(source);
-  if (stmts.length === 0) return -1;
   for (let i = 0; i < stmts.length; i++) {
     const { start, end } = stmts[i]!;
+    // `end` is just past the last char; allow a caret sitting exactly there
+    // (the common "cursor at end of the statement I just typed" case) to still
+    // resolve to that statement.
     if (offset >= start && offset <= end) return i;
   }
-  return stmts.length - 1;
+  return -1;
 }

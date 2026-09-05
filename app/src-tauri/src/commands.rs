@@ -181,26 +181,47 @@ pub async fn execute_query(
         let result = driver.execute_query(&sql).await;
         let _ = tx.send(result);
     });
+
+    // Tag this spawn so we only ever evict our own entry below. If a stale
+    // entry is still parked under this id (a superseded run on a shared
+    // request-id counter), abort it so its task doesn't outlive tracking.
+    let token = QUERY_SPAWN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if let Some((_, prev)) = state
+        .queries
+        .lock()
+        .unwrap()
+        .insert(request_id.clone(), (token, handle))
     {
-        let mut queries = state.queries.lock().unwrap();
-        if queries.contains_key(&request_id) {
-            return Err(format!("Duplicate request id: {request_id}"));
-        }
-        queries.insert(request_id.clone(), handle);
+        prev.abort();
     }
 
-    match rx.await {
+    let outcome = rx.await;
+
+    // Drop our tracking entry now that the task is done, so `state.queries`
+    // doesn't accumulate completed handles. Guard on the token so a newer run
+    // that reused this request id keeps its entry.
+    {
+        let mut map = state.queries.lock().unwrap();
+        if map.get(&request_id).map(|(t, _)| *t) == Some(token) {
+            map.remove(&request_id);
+        }
+    }
+
+    match outcome {
         Ok(Ok(r)) => Ok(r),
         Ok(Err(e)) => Err(e.to_string()),
         Err(_) => Err("Query cancelled".to_string()),
     }
 }
 
+/// Monotonic tag for spawned query tasks — see `execute_query`.
+static QUERY_SPAWN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Abort an in-flight query by request id (best-effort — no-op if it already
 /// completed). The spawned task's DB future is dropped, cutting the wait.
 #[tauri::command]
 pub fn cancel_query(state: State<'_, AppState>, request_id: String) -> Result<(), String> {
-    if let Some(handle) = state.queries.lock().unwrap().remove(&request_id) {
+    if let Some((_, handle)) = state.queries.lock().unwrap().remove(&request_id) {
         handle.abort();
     }
     Ok(())
@@ -348,12 +369,16 @@ pub async fn in_transaction(
 
 #[tauri::command]
 pub async fn save_saved_query(mut query: SavedQuery) -> Result<String, String> {
+    // Epoch milliseconds, to match the frontend's `Date.now()` — the UI feeds
+    // these straight into `new Date(...)`.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
+        .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     let mut list = crate::saved_queries::load_saved_queries()?;
     if let Some(pos) = list.iter().position(|q| q.id == query.id) {
+        // Preserve the original creation time on an upsert.
+        query.created_at = list[pos].created_at;
         query.updated_at = now;
         list[pos] = query.clone();
     } else {

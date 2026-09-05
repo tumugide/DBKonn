@@ -311,9 +311,12 @@ impl ConnectionConfig {
         let mut ssl_mode = SslMode::Prefer;
         let mut verify_hostname = false;
         let mut verified_mode_requested = false;
+        // Postgres spells it `sslmode`; MySQL DSNs (and our `connection_url`
+        // for MySQL) spell it `ssl-mode`. Normalize `_` to `-` so MySQL's
+        // `VERIFY_CA` / `VERIFY_IDENTITY` land on the same arms as Postgres'.
         if let Some((_, v)) = url
             .query_pairs()
-            .find(|(k, _)| k == "sslmode" || k == "ssl" || k == "ssl-mode")
+            .find(|(k, _)| k == "sslmode" || k == "ssl" || k == "ssl-mode" || k == "ssl_mode")
         {
             let v = v.to_lowercase().replace('_', "-");
             match v.as_str() {
@@ -518,8 +521,8 @@ mod tests {
         let url = cfg.connection_url();
         // CA path is only wired up when the user asked for an authenticated
         // (Require) transport, so a Prefer mode must NOT append ssl-ca.
-        assert!(url.contains("ssl-mode=PREFERRED"), "url: {url}");
-        assert!(!url.contains("ssl-ca"), "url: {url}");
+        assert!(url.contains("ssl-mode=PREFERRED"), "connection URL missing ssl-mode=PREFERRED");
+        assert!(!url.contains("ssl-ca"), "connection URL should not contain ssl-ca in Prefer mode");
     }
 
     #[test]
@@ -541,8 +544,8 @@ mod tests {
             color: None,
         };
         let url = cfg.connection_url();
-        assert!(url.contains("sslmode=require"), "url: {url}");
-        assert!(!url.contains("verify-ca"), "url: {url}");
+        assert!(url.contains("sslmode=require"), "connection URL missing sslmode=require");
+        assert!(!url.contains("verify-ca"), "connection URL should not upgrade plain Require to verify-ca");
     }
 
     #[test]
@@ -572,6 +575,16 @@ mod tests {
             "expected URL to contain ssl-mode=VERIFY_CA"
         );
         assert!(url.contains("ssl-ca="), "expected URL to contain ssl-ca=");
+
+        // Round-trip: the MySQL `ssl-mode=VERIFY_CA` DSN must parse back to a
+        // verified Require connection with the CA path intact.
+        let parsed = ConnectionConfig::from_url(&url).unwrap();
+        assert_eq!(parsed.ssl_mode, SslMode::Require);
+        assert_eq!(parsed.tls.as_ref().map(|t| t.verify_hostname), Some(false));
+        assert_eq!(
+            parsed.tls.as_ref().and_then(|t| t.ca_cert_path.as_deref()),
+            Some("/etc/mysql/ca.pem")
+        );
     }
 
     #[test]

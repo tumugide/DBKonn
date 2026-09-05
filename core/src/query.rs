@@ -250,7 +250,9 @@ pub struct SavedQuery {
     pub conn_id: String,
     pub name: String,
     pub sql: String,
+    /// Epoch milliseconds (matches the frontend's `Date.now()`).
     pub created_at: i64,
+    /// Epoch milliseconds (matches the frontend's `Date.now()`).
     pub updated_at: i64,
 }
 

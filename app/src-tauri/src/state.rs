@@ -30,5 +30,10 @@ pub struct AppState {
     /// statement; aborting it drops the DB future mid-flight, which for the
     /// pool-backed drivers (pg/mysql/sqlite) releases the pooled connection
     /// back for reuse (sqlx revalidates it on next checkout).
-    pub queries: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+    ///
+    /// The `u64` is a per-spawn token: `execute_query` only removes its own
+    /// entry once it finishes, so a later run that reused the same request id
+    /// (two query tabs on one connection share a counter) isn't evicted by an
+    /// older run completing.
+    pub queries: Mutex<HashMap<String, (u64, tokio::task::JoinHandle<()>)>>,
 }
