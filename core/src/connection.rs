@@ -483,10 +483,10 @@ mod tests {
             color: None,
         };
         let url = cfg.connection_url();
-        assert!(url.contains("sslmode=verify-full"), "url: {url}");
-        assert!(url.contains("sslrootcert="), "url: {url}");
-        assert!(url.contains("sslcert="), "url: {url}");
-        assert!(url.contains("sslkey="), "url: {url}");
+        assert!(url.contains("sslmode=verify-full"), "connection URL missing sslmode=verify-full");
+        assert!(url.contains("sslrootcert="), "connection URL missing sslrootcert parameter");
+        assert!(url.contains("sslcert="), "connection URL missing sslcert parameter");
+        assert!(url.contains("sslkey="), "connection URL missing sslkey parameter");
 
         // Round-trip: parsing the URL must reconstruct the same TLS config.
         let parsed = ConnectionConfig::from_url(&url).unwrap();
