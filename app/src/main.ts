@@ -35,6 +35,14 @@ import {
 
 // ── Theme application ─────────────────────────────────────────────────────────
 
+// Monotonic request-id source for single-shot (non-cancelled) execute_query
+// calls (row-edit commits, inserts, derived queries). The SQL editor manages
+// its own ids so its Stop button can target them.
+let execReqSeq = 0;
+function nextExecReqId(connId: string): string {
+  return `${connId}:${++execReqSeq}`;
+}
+
 function applyTheme(theme: ThemeType) {
   document.documentElement.setAttribute("data-theme", theme);
   localStorage.setItem("dbkonn-theme", theme);
@@ -1023,7 +1031,7 @@ function renderQueryTabContent(tab: QueryTab) {
         onCommit: async (sql) => {
           const ac3 = appState.activeConn.value;
           if (!ac3) return;
-          const result = await ipc.executeQuery(ac3.connId, sql);
+          const result = await ipc.executeQuery(ac3.connId, sql, nextExecReqId(ac3.connId));
           if (result.error) throw new Error(result.error);
           if (result.affected_rows === 0) {
             throw new Error(
@@ -1041,7 +1049,7 @@ function renderQueryTabContent(tab: QueryTab) {
 
   sqlEditor = new SqlEditor(wrap, {
     initialDoc: tab.sqlDoc,
-    initialResult: tab.sqlResult,
+    initialResults: tab.sqlResults,
     onBeforeNewResult: () => {
       recordPanelEl.classList.remove("open");
       queryRecordPanel.clear();
@@ -1251,7 +1259,7 @@ function renderTableTabContent(_tab: TableTab) {
     onCommit: async (sql) => {
       const ac2 = appState.activeConn.value;
       if (!ac2) return;
-      const result = await ipc.executeQuery(ac2.connId, sql);
+      const result = await ipc.executeQuery(ac2.connId, sql, nextExecReqId(ac2.connId));
       if (result.error) throw new Error(result.error);
       if (result.affected_rows === 0) {
         throw new Error(
@@ -1273,7 +1281,7 @@ function renderTableTabContent(_tab: TableTab) {
     onDelete: async (sql) => {
       const ac2 = appState.activeConn.value;
       if (!ac2) return;
-      const result = await ipc.executeQuery(ac2.connId, sql);
+      const result = await ipc.executeQuery(ac2.connId, sql, nextExecReqId(ac2.connId));
       if (result.error) throw new Error(result.error);
       if (result.affected_rows === 0) {
         throw new Error(
@@ -1541,7 +1549,7 @@ function renderTableTabContent(_tab: TableTab) {
     }
 
     try {
-      const res = await ipc.executeQuery(ac2.connId, result.sql);
+      const res = await ipc.executeQuery(ac2.connId, result.sql, nextExecReqId(ac2.connId));
       if (res.error) {
         alert(`Delete failed: ${res.error}`);
         return;
@@ -1825,7 +1833,7 @@ async function establishConnSession(
         ? "SELECT current_database()"
         : "SELECT DATABASE()";
     try {
-      const r = await ipc.executeQuery(connId, dbQuery);
+      const r = await ipc.executeQuery(connId, dbQuery, nextExecReqId(connId));
       const v = r.rows?.[0]?.[0];
       if (typeof v === "string" && v) selectedDb = v;
     } catch {
@@ -1849,7 +1857,12 @@ async function establishConnSession(
 }
 
 function remapRestoredTabs(tabs: AppTab[], connId: string): AppTab[] {
-  return tabs.map((t) => ({ ...t, connId }));
+  return tabs.map((t) => {
+    if (t.kind === "query") {
+      return { ...t, connId, sqlResults: t.sqlResults ?? [] };
+    }
+    return { ...t, connId };
+  });
 }
 
 // "Connected: <name>" for engines with no database concept (SQLite), or
@@ -2130,6 +2143,7 @@ function persistCurrentTabState() {
       ...tab,
       sqlDoc: sqlEditor?.getDoc() ?? tab.sqlDoc,
       sqlResult: sqlEditor?.getLastResult() ?? tab.sqlResult,
+      sqlResults: sqlEditor?.getResults() ?? tab.sqlResults,
     };
   }
 
@@ -2511,6 +2525,7 @@ function openQueryTab() {
     connId: ac.connId,
     sqlDoc: "SELECT 1;\n",
     sqlResult: null,
+    sqlResults: [],
   };
 
   appState.openTabs.set([...appState.openTabs.value, tab]);

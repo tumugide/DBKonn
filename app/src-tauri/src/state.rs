@@ -25,4 +25,15 @@ pub struct AppState {
     /// The dynamic "open query tab" items currently appended to the Query
     /// menu, keyed by tab id, so they can be removed before each rebuild.
     pub query_tab_items: Mutex<HashMap<String, tauri::menu::CheckMenuItem<tauri::Wry>>>,
+    /// In-flight query tasks keyed by request id, so a frontend "Stop" can
+    /// abort the run. Each entry is the spawned task running a single
+    /// statement; aborting it drops the DB future mid-flight, which for the
+    /// pool-backed drivers (pg/mysql/sqlite) releases the pooled connection
+    /// back for reuse (sqlx revalidates it on next checkout).
+    ///
+    /// The `u64` is a per-spawn token: `execute_query` only removes its own
+    /// entry once it finishes, so a later run that reused the same request id
+    /// (two query tabs on one connection share a counter) isn't evicted by an
+    /// older run completing.
+    pub queries: Mutex<HashMap<String, (u64, tokio::task::JoinHandle<()>)>>,
 }

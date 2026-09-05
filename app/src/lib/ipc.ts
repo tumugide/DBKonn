@@ -5,6 +5,17 @@ import { invoke } from "@tauri-apps/api/core";
 export type DbEngine = "postgres" | "mysql" | "sqlite" | "mssql";
 export type SslMode  = "prefer"   | "require" | "disable";
 
+export interface TlsConfig {
+  /** Path to a PEM CA certificate to trust instead of the OS root store. */
+  ca_cert_path?: string;
+  /** Path to a PEM client certificate (paired with client_key_path). */
+  client_cert_path?: string;
+  /** Path to the PEM client private key. */
+  client_key_path?: string;
+  /** Verify the server hostname matches the certificate (verify-full). */
+  verify_hostname: boolean;
+}
+
 export interface ConnectionConfig {
   id: string;
   name: string;
@@ -16,6 +27,8 @@ export interface ConnectionConfig {
   database?: string;
   file_path?: string;
   ssl_mode: SslMode;
+  /** Optional richer TLS options (CA path, client cert, verify-full). */
+  tls?: TlsConfig;
   /** User-assigned color tag (hex, e.g. "#e06c75") for telling connections apart at a glance */
   color?: string;
 }
@@ -72,6 +85,15 @@ export interface ParseError {
   col?: number;
 }
 
+export interface SavedQuery {
+  id: string;
+  conn_id: string;
+  name: string;
+  sql: string;
+  created_at: number;
+  updated_at: number;
+}
+
 // ── IPC calls ─────────────────────────────────────────────────────────────────
 
 /** Default ceiling for a browse/metadata round-trip. Generous — this is a
@@ -121,7 +143,8 @@ export const ipc = {
   listTables:          (connId: string, schema?: string)                        => invoke<TableInfo[]>("list_tables", { connId, schema }),
   describeTable:       (connId: string, schema: string|undefined, table: string) => withTimeout(invoke<[ColumnInfo[], IndexInfo[]]>("describe_table", { connId, schema, table }), `describe ${table}`),
 
-  executeQuery:        (connId: string, sql: string)                            => invoke<QueryResult>("execute_query", { connId, sql }),
+  executeQuery:        (connId: string, sql: string, requestId: string)          => invoke<QueryResult>("execute_query", { connId, sql, requestId }),
+  cancelQuery:         (requestId: string)                                        => invoke<void>("cancel_query", { requestId }),
   fetchTableRows:      (connId: string, schema: string|undefined, table: string, page: PageRequest, whereClause?: string) =>
                          withTimeout(invoke<QueryResult>("fetch_table_rows", { connId, schema, table, page, whereClause }), `fetch ${table}`),
   countRows:           (connId: string, schema: string|undefined, table: string, whereClause?: string) =>
@@ -133,6 +156,10 @@ export const ipc = {
   saveConnection:      (config: ConnectionConfig)                               => invoke<string>("save_connection", { config }),
   loadConnections:     ()                                                       => invoke<ConnectionConfig[]>("load_connections"),
   deleteConnection:    (connId: string)                                         => invoke<void>("delete_connection", { connId }),
+
+  saveSavedQuery:      (query: SavedQuery)                                      => invoke<string>("save_saved_query", { query }),
+  loadSavedQueries:    ()                                                       => invoke<SavedQuery[]>("load_saved_queries"),
+  deleteSavedQuery:    (id: string)                                             => invoke<void>("delete_saved_query", { id }),
 
   syncThemeMenu:       (theme: string)                                          => invoke<void>("sync_theme_menu", { theme }),
   syncQueryMenu:       (tabs: { id: string; title: string }[], activeTabId: string | null) =>

@@ -31,7 +31,7 @@ function toLightTab(tab: AppTab): AppTab {
       selectedRecord: null,
     };
   }
-  return { ...tab, sqlResult: null };
+  return { ...tab, sqlResult: null, sqlResults: [] };
 }
 
 export function saveSession(sessions: ConnSession[], activeConnConfigId: string | null) {

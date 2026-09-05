@@ -1,5 +1,6 @@
 mod commands;
 mod connections;
+mod saved_queries;
 mod state;
 mod updater;
 
@@ -116,6 +117,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state::AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::connect_db,
@@ -127,6 +129,7 @@ pub fn run() {
             commands::list_tables,
             commands::describe_table,
             commands::execute_query,
+            commands::cancel_query,
             commands::fetch_table_rows,
             commands::count_rows,
             commands::validate_sql,
@@ -140,6 +143,9 @@ pub fn run() {
             commands::commit_transaction,
             commands::rollback_transaction,
             commands::in_transaction,
+            commands::save_saved_query,
+            commands::load_saved_queries,
+            commands::delete_saved_query,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]

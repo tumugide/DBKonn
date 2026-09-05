@@ -241,6 +241,21 @@ impl Default for PageRequest {
     }
 }
 
+/// A user-named saved query (snippet). Named and stored per-connection, so the
+/// same SQL can exist under different names on different connections.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedQuery {
+    pub id: String,
+    /// The connection `id` this snippet belongs to.
+    pub conn_id: String,
+    pub name: String,
+    pub sql: String,
+    /// Epoch milliseconds (matches the frontend's `Date.now()`).
+    pub created_at: i64,
+    /// Epoch milliseconds (matches the frontend's `Date.now()`).
+    pub updated_at: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
