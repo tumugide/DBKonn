@@ -16,6 +16,7 @@ All frontend work uses **Bun** (`app/bun.lock` is authoritative; the stray `app/
 | Frontend only (Vite, port 5173, strict) | `cd app && bun run dev` |
 | Typecheck + frontend build | `cd app && bun run build` (`tsc && vite build`) |
 | Production app bundle | `cd app && bunx tauri build --target aarch64-apple-darwin` |
+| Production bundle *with updater* (CI-style) | `cd app/src-tauri && TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/dbkonn.key)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" cargo tauri build --target aarch64-apple-darwin --config tauri.updater.conf.json` |
 | Build everything (Rust) | `cargo build` |
 | Core library tests | `cargo test -p dbkonn-core` |
 | One Rust test | `cargo test -p dbkonn-core <test_name>` (e.g. `quotes_identifiers_per_dialect`) |
@@ -68,7 +69,7 @@ DBKonn assembles a lot of SQL by string interpolation (schema browse, table pagi
 - `RowValue` (`core/src/query.rs`) has a custom `Serialize`: `i64` outside JS safe-integer range is emitted as a **string** so BIGINT/oid values aren't silently rounded in the webview.
 - `statement_returns_rows()` decides whether `execute_query` fetches a result set or reports an affected-row count — it strips leading comments and understands `RETURNING`, `CALL`, `VALUES`, `PRAGMA`, etc.
 - Native macOS menu bar (Theme + Query submenus) is built in `app/src-tauri/src/lib.rs`, kept in sync with the webview via the `sync_theme_menu` / `sync_query_menu` commands and `menu:*` events. All of this is `#[cfg(target_os = "macos")]`.
-- Updater (`updater.rs`): the "Check for Updates" menu item hits the GitHub releases API, compares semver, and opens the `.dmg` URL. No silent auto-update; builds are ad-hoc signed (`signingIdentity: "-"`).
+- Updater (`updater.rs`): the "Check for Updates" menu item uses `tauri-plugin-updater` to check the GitHub release manifest, then downloads/verifies/installs the signed `.app.tar.gz` in place and relaunches. It is only enabled in CI-style release builds: the updater config (`plugins.updater.pubkey` + endpoints) and `bundle.createUpdaterArtifacts` live in **`app/src-tauri/tauri.updater.conf.json`**, which is merged via `--config` **only in CI** so local `tauri build` runs never demand the signing key. In dev builds the menu item reports that the updater isn't configured (no chance of a password prompt).
 
 ### Frontend structure
 
@@ -86,7 +87,12 @@ Reliability patterns already in place (preserve them):
 
 ## Release process
 
-`.github/workflows/release.yml` runs on every push to `main`: CI derives the next patch version from the latest `v*` git tag, stamps it into `Cargo.toml`, `app/src-tauri/tauri.conf.json`, and `app/package.json` **within the CI workspace only** (nothing is committed back), builds the Apple-Silicon bundle, and publishes/updates the `v<version>` GitHub release with the `.dmg`. The committed version fields are just a floor — the real version lives in git tags and releases. Windows/Linux build jobs exist but are commented out.
+`.github/workflows/release.yml` runs on every push to `main`: CI derives the next patch version from the latest `v*` git tag, stamps it into `Cargo.toml`, `app/src-tauri/tauri.conf.json`, and `app/package.json` **within the CI workspace only** (nothing is committed back), builds the Apple-Silicon bundle **with the updater config merged** (`--config tauri.updater.conf.json`), signs the update artifacts with the `TAURI_SIGNING_PRIVATE_KEY` secret, generates `latest.json`, and publishes/updates the `v<version>` GitHub release with the `.dmg`, `.app.tar.gz`, `.app.tar.gz.sig`, and `latest.json`. The committed version fields are just a floor — the real version lives in git tags and releases. Windows/Linux build jobs exist but are commented out.
+
+## Update signing
+
+- Keypair lives at `~/.tauri/dbkonn.key` (+ `.key.pub`), generated with `cargo tauri signer generate --ci -w ~/.tauri/dbkonn.key`. **Losing it breaks updates for installed apps forever**; back it up.
+- The *public* half is committed in `app/src-tauri/tauri.updater.conf.json` (base64 of the `.key.pub` text, including the `untrusted comment:` header/newline — it is intentionally *not* the raw text). The *private* key must be set as the GitHub Actions repo secrets `TAURI_SIGNING_PRIVATE_KEY` (the file content) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (empty — the generated key has no password). Both env vars are exported during the CI build step; passing an empty password explicitly keeps `tauri build` from prompting for a TTY.
 
 ## Notes
 

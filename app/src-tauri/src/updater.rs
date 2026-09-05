@@ -1,108 +1,120 @@
-use semver::Version;
-use serde::Deserialize;
-use tauri::AppHandle;
+use serde::Serialize;
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-use tauri_plugin_shell::ShellExt;
+use tauri_plugin_updater::{Update, UpdaterExt};
 
-const RELEASES_API: &str = "https://api.github.com/repos/tumugide/DBKonn/releases/latest";
-
-#[derive(Deserialize)]
-struct GithubRelease {
-    tag_name: String,
-    html_url: String,
-    assets: Vec<GithubAsset>,
+/// Progress payload forwarded to the webview (`update:progress` event) so the
+/// frontend can render a progress bar in future releases. The Rust side relies
+/// on the native dialog; nothing breaks if no listener is attached yet.
+#[derive(Clone, Serialize)]
+struct UpdateProgress {
+    downloaded: u64,
+    total: Option<u64>,
 }
 
-#[derive(Deserialize)]
-struct GithubAsset {
-    name: String,
-    browser_download_url: String,
-}
-
-/// Extracts the version from tags like `v0.1.4`.
-fn parse_version_from_tag(tag: &str) -> Option<Version> {
-    Version::parse(tag.strip_prefix('v').unwrap_or(tag)).ok()
-}
-
+/// Checks for an update via `tauri-plugin-updater`, and if one is available
+/// offers to download, verify and install it in place (the app restarts into
+/// the new version afterwards).
+///
+/// The updater is only configured in builds that merge `tauri.updater.conf.json`
+/// (the CI release build). Dev/local builds have no endpoints configured, in
+/// which case this reports that the feature isn't enabled rather than failing.
 pub async fn check_for_updates(app: AppHandle) {
     let current_version = app.package_info().version.clone();
 
-    let client = match reqwest::Client::builder().user_agent("DBKonn-App").build() {
-        Ok(client) => client,
+    let updater = match app.updater() {
+        Ok(updater) => updater,
+        Err(tauri_plugin_updater::Error::EmptyEndpoints) => {
+            show_info(
+                &app,
+                "Auto-update not configured",
+                "This build of DBKonn was built without the in-app updater.\n\nDownload the latest version from the GitHub releases page instead."
+                    .to_string(),
+            );
+            return;
+        }
         Err(err) => {
-            show_error(&app, format!("Could not check for updates: {err}"));
+            show_error(&app, format!("Could not set up the updater: {err}"));
             return;
         }
     };
 
-    let response = match client.get(RELEASES_API).send().await {
-        Ok(response) => response,
-        Err(err) => {
-            show_error(&app, format!("Could not check for updates: {err}"));
-            return;
-        }
-    };
-
-    if !response.status().is_success() {
-        show_error(
-            &app,
-            format!("Could not check for updates (HTTP {}).", response.status()),
-        );
-        return;
-    }
-
-    let release: GithubRelease = match response.json().await {
-        Ok(release) => release,
-        Err(err) => {
-            show_error(&app, format!("Could not read update information: {err}"));
-            return;
-        }
-    };
-
-    let latest_version = parse_version_from_tag(&release.tag_name);
-
-    match latest_version {
-        Some(latest) if latest > current_version => {
-            // Prefer linking straight to the Apple Silicon dmg asset; fall back to
-            // the release page itself if the asset naming ever changes.
-            let download_url = release
-                .assets
-                .iter()
-                .find(|a| a.name.ends_with("aarch64.dmg"))
-                .map(|a| a.browser_download_url.clone())
-                .unwrap_or(release.html_url);
-
-            let app_for_callback = app.clone();
-            app.dialog()
-                .message(format!(
-                    "A new version of DBKonn is available.\n\nCurrent version: {current_version}\nLatest version: {latest}"
-                ))
-                .title("Update Available")
-                .kind(MessageDialogKind::Info)
-                .buttons(MessageDialogButtons::OkCancelCustom(
-                    "Download".to_string(),
-                    "Later".to_string(),
-                ))
-                .show(move |download| {
-                    if download {
-                        let _ = app_for_callback.shell().open(download_url, None);
-                    }
-                });
-        }
-        Some(_) => {
+    let update = match updater.check().await {
+        Ok(Some(update)) => update,
+        Ok(None) => {
             show_info(
                 &app,
                 "You're up to date",
                 format!("DBKonn {current_version} is the latest version."),
             );
+            return;
         }
-        None => {
-            show_error(
-                &app,
-                "Could not determine the latest available version.".to_string(),
-            );
+        Err(err) => {
+            show_error(&app, format!("Could not check for updates: {err}"));
+            return;
         }
+    };
+
+    let latest = update.version.clone();
+    let mut message = format!(
+        "A new version of DBKonn is available.\n\nCurrent version: {current_version}\nLatest version: {latest}"
+    );
+    if let Some(notes) = update.body.as_ref().filter(|b| !b.trim().is_empty()) {
+        message.push_str("\n\nRelease notes:\n");
+        message.push_str(notes);
     }
+    message.push_str("\n\nDownload and install now?");
+
+    let app_for_dialog = app.clone();
+    app.dialog()
+        .message(message)
+        .title("Update Available")
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Download & Install".to_string(),
+            "Later".to_string(),
+        ))
+        .show(move |install| {
+            if !install {
+                return;
+            }
+            let app_for_task = app_for_dialog.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) = install_update(app_for_task.clone(), update).await {
+                    show_error(&app_for_task, format!("Update failed: {err}"));
+                    return;
+                }
+                // macOS/Linux: the new build is on disk; relaunch into it.
+                app_for_task.restart();
+            });
+        });
+}
+
+async fn install_update(
+    app: AppHandle,
+    update: Update,
+) -> Result<(), tauri_plugin_updater::Error> {
+    let _ = app.emit("update:status", "downloading");
+    let result = update
+        .download_and_install(
+            |received, total| {
+                let _ = app.emit(
+                    "update:progress",
+                    UpdateProgress {
+                        downloaded: received as u64,
+                        total,
+                    },
+                );
+            },
+            || {
+                let _ = app.emit("update:status", "installing");
+            },
+        )
+        .await;
+    if result.is_ok() {
+        let _ = app.emit("update:status", "restarting");
+    }
+    result
 }
 
 fn show_info(app: &AppHandle, title: &str, message: String) {
