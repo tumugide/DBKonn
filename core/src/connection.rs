@@ -311,8 +311,12 @@ impl ConnectionConfig {
         let mut ssl_mode = SslMode::Prefer;
         let mut verify_hostname = false;
         let mut verified_mode_requested = false;
-        if let Some((_, v)) = url.query_pairs().find(|(k, _)| k == "sslmode" || k == "ssl") {
-            match v.to_lowercase().as_str() {
+        if let Some((_, v)) = url
+            .query_pairs()
+            .find(|(k, _)| k == "sslmode" || k == "ssl" || k == "ssl-mode")
+        {
+            let v = v.to_lowercase().replace('_', "-");
+            match v.as_str() {
                 "require" | "required" | "true" | "on" | "1" => ssl_mode = SslMode::Require,
                 "disable" | "disabled" | "false" | "off" | "0" => ssl_mode = SslMode::Disable,
                 "verify-full" | "verify-identity" => {
@@ -320,11 +324,13 @@ impl ConnectionConfig {
                     verify_hostname = true;
                     verified_mode_requested = true;
                 }
-                "verify-ca" | "verify_ca" => {
+                "verify-ca" => {
                     ssl_mode = SslMode::Require;
                     verify_hostname = false;
                     verified_mode_requested = true;
                 }
+                // MySQL ssl-mode strings
+                "preferred" => ssl_mode = SslMode::Prefer,
                 _ => ssl_mode = SslMode::Prefer,
             }
         }
