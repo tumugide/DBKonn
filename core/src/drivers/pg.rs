@@ -346,14 +346,38 @@ impl DbConnection for PgDriver {
         // `list_schemas` — which reads pg_namespace — still showed the
         // schema. pg_class also surfaces materialized views, foreign tables
         // and partitioned tables, which information_schema.tables omits.
+        // Routines (pg_proc) and triggers (pg_trigger) are unioned in so the
+        // sidebar can browse them and show their DDL.
         let rows = sqlx::query(
-            "SELECT n.nspname, c.relname, c.relkind::text, \
-                    CASE WHEN c.reltuples < 0 THEN NULL ELSE c.reltuples::bigint END \
-             FROM pg_catalog.pg_class c \
-             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
-             WHERE n.nspname = $1 \
-               AND c.relkind = ANY(ARRAY['r','p','v','m','f']::\"char\"[]) \
-             ORDER BY c.relname",
+            "SELECT obj_schema, obj_name, obj_type, row_est FROM (
+                SELECT n.nspname AS obj_schema, c.relname AS obj_name,
+                       CASE c.relkind
+                         WHEN 'r' THEN 'table'
+                         WHEN 'p' THEN 'table'
+                         WHEN 'v' THEN 'view'
+                         WHEN 'm' THEN 'materialized view'
+                         WHEN 'f' THEN 'foreign table'
+                       END AS obj_type,
+                       CASE WHEN c.reltuples < 0 THEN NULL ELSE c.reltuples::bigint END AS row_est
+                FROM pg_catalog.pg_class c
+                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = $1
+                  AND c.relkind = ANY(ARRAY['r','p','v','m','f']::\"char\"[])
+                UNION ALL
+                SELECT n.nspname, p.proname,
+                       CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END,
+                       NULL
+                FROM pg_catalog.pg_proc p
+                JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = $1 AND p.prokind IN ('f','p')
+                UNION ALL
+                SELECT n.nspname, t.tgname, 'trigger', NULL
+                FROM pg_catalog.pg_trigger t
+                JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = $1 AND NOT t.tgisinternal
+            ) objs
+            ORDER BY obj_type, obj_name",
         )
         .bind(schema)
         .fetch_all(&self.pool)
@@ -361,24 +385,90 @@ impl DbConnection for PgDriver {
 
         Ok(rows
             .iter()
-            .map(|r| {
-                let relkind: String = r.get(2);
-                let table_type = match relkind.as_str() {
-                    "v" => "view",
-                    "m" => "materialized view",
-                    "f" => "foreign table",
-                    _ => "table", // 'r' ordinary, 'p' partitioned
-                }
-                .to_string();
-                TableInfo {
-                    schema: r.get::<String, _>(0),
-                    name: r.get::<String, _>(1),
-                    table_type,
-                    // reltuples is -1 until the table is first ANALYZEd.
-                    row_count_estimate: r.try_get::<Option<i64>, _>(3).ok().flatten(),
-                }
+            .map(|r| TableInfo {
+                schema: r.get::<String, _>(0),
+                name: r.get::<String, _>(1),
+                table_type: r.get::<String, _>(2),
+                // reltuples is -1 until the table is first ANALYZEd.
+                row_count_estimate: r.try_get::<Option<i64>, _>(3).ok().flatten(),
             })
             .collect())
+    }
+
+    async fn get_object_ddl(
+        &self,
+        schema: Option<&str>,
+        name: &str,
+        object_type: &str,
+    ) -> Result<String, CoreError> {
+        let schema = schema.unwrap_or("public");
+        match object_type {
+            // pg_get_viewdef returns just the SELECT body — reconstruct the
+            // full CREATE VIEW / MATERIALIZED VIEW header around it.
+            "view" | "materialized view" => {
+                let row = sqlx::query(
+                    "SELECT pg_get_viewdef(c.oid, true) AS def, c.relkind::text AS relkind \
+                     FROM pg_catalog.pg_class c \
+                     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+                     WHERE n.nspname = $1 AND c.relname = $2 \
+                       AND c.relkind = ANY(ARRAY['v','m']::\"char\"[])",
+                )
+                .bind(schema)
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or_else(|| CoreError::Query(format!("No view named {name}")))?;
+                let def: String = row.get(0);
+                let relkind: String = row.get(1);
+                let kw = if relkind == "m" {
+                    "MATERIALIZED VIEW"
+                } else {
+                    "VIEW"
+                };
+                Ok(format!(
+                    "CREATE {kw} {}.{} AS\n{def}",
+                    quote_ident(&ENGINE, schema),
+                    quote_ident(&ENGINE, name)
+                ))
+            }
+            "function" | "procedure" => {
+                // Overloaded functions share a name — return the first
+                // signature's definition.
+                let row = sqlx::query(
+                    "SELECT pg_get_functiondef(p.oid) AS def \
+                     FROM pg_catalog.pg_proc p \
+                     JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace \
+                     WHERE n.nspname = $1 AND p.proname = $2 \
+                     ORDER BY p.oid \
+                     LIMIT 1",
+                )
+                .bind(schema)
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or_else(|| CoreError::Query(format!("No routine named {name}")))?;
+                Ok(row.get::<String, _>(0))
+            }
+            "trigger" => {
+                let row = sqlx::query(
+                    "SELECT pg_get_triggerdef(t.oid) AS def \
+                     FROM pg_catalog.pg_trigger t \
+                     JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid \
+                     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+                     WHERE n.nspname = $1 AND t.tgname = $2 AND NOT t.tgisinternal \
+                     LIMIT 1",
+                )
+                .bind(schema)
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or_else(|| CoreError::Query(format!("No trigger named {name}")))?;
+                Ok(row.get::<String, _>(0))
+            }
+            other => Err(CoreError::Unsupported(format!(
+                "Postgres DDL reconstruction is not supported for '{other}' objects"
+            ))),
+        }
     }
 
     async fn describe_table(

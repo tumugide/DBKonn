@@ -1,9 +1,12 @@
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
 use async_trait::async_trait;
 use tiberius::{AuthMethod, Client, ColumnType, Config, FromSql, Row};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex as TokioMutex;
+use tokio::sync::{Mutex as TokioMutex, OwnedSemaphorePermit, Semaphore};
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 use crate::{
@@ -18,13 +21,186 @@ use super::DbConnection;
 
 const ENGINE: DbEngine = DbEngine::MSSQL;
 
+/// Max live SQL Server connections per driver (idle + checked out). Matches
+/// the sqlx pools the other three engines use (10 for pg and mysql).
+const MAX_CONNECTIONS: usize = 10;
+
 type MssqlClient = Client<tokio_util::compat::Compat<TcpStream>>;
 
-pub struct MssqlDriver {
+/// A small hand-rolled connection pool for tiberius.
+///
+/// tiberius ships no pooling, so every driver call used to open a fresh
+/// TCP + TLS + TDS-LOGIN handshake — several round trips per query. This pool
+/// reuses idle `Client`s instead.
+///
+/// Invariant: every live client — idle or checked out — holds exactly one
+/// `Semaphore` permit, so the pool never exceeds `MAX_CONNECTIONS` sockets,
+/// and the semaphore (not a hand-rolled wait) is what blocks `acquire` when
+/// the pool is full, with no lost-wakeup footguns.
+///
+/// Every checkout health-checks the client with `SELECT 1` before handing it
+/// out. A checked-out client can be left desynced when a query future is
+/// dropped mid-flight (query cancellation) or after a server-side timeout;
+/// TDS is a stateful conversation, so reusing such a client would serve
+/// garbage. One extra round trip costs far less than a re-handshake, so
+/// correctness never depends on clients being returned in a known-good state.
+pub struct MssqlPool {
     config: tiberius::Config,
+    /// Bounds total live connections; capacity is shared by idle and checked
+    /// out clients — see the invariant above.
+    semaphore: Arc<Semaphore>,
+    /// Idle, reusable clients with their permits attached. A standard
+    /// (non-async) mutex: the critical section is a deque push/pop, never an
+    /// await, so `PooledClient::drop` can return a client without async.
+    idle: StdMutex<VecDeque<(MssqlClient, OwnedSemaphorePermit)>>,
+    /// Set by `close()`. Further `acquire` calls fail and released clients
+    /// are dropped (socket + permit) instead of re-pooled, so server sockets
+    /// close promptly on disconnect.
+    closed: AtomicBool,
+}
+
+impl MssqlPool {
+    fn new(config: tiberius::Config, max_connections: usize) -> Self {
+        Self {
+            config,
+            semaphore: Arc::new(Semaphore::new(max_connections)),
+            idle: StdMutex::new(VecDeque::new()),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    async fn acquire(&self) -> Result<PooledClient<'_>, CoreError> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(CoreError::Driver("MSSQL connection pool is closed".into()));
+        }
+
+        // Reserve a slot up-front. If an idle client takes it, this spare
+        // permit is released back; otherwise it covers the new socket.
+        let spare = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| CoreError::Driver("MSSQL connection pool is closed".into()))?;
+
+        // Pop under a short-lived lock so the (non-Send) guard is dropped
+        // before any await below.
+        let idle_client = self.idle.lock().unwrap_or_else(|e| e.into_inner()).pop_back();
+        let mut entry = match idle_client {
+            Some(entry) => {
+                // The idle entry already carries its own permit; the freshly
+                // acquired spare is exactly what the pool can spare.
+                drop(spare);
+                entry
+            }
+            None => (self.connect_new().await?, spare),
+        };
+
+        // Discard any desynced/dead client rather than serving it, keeping
+        // its permit so the slot is reused by the replacement socket.
+        if !self.health_check(&mut entry.0).await {
+            drop(entry.0);
+            entry.0 = self.connect_new().await?;
+            if !self.health_check(&mut entry.0).await {
+                return Err(CoreError::Connection(
+                    "MSSQL connection lost and reconnect failed".into(),
+                ));
+            }
+        }
+
+        Ok(PooledClient {
+            pool: self,
+            entry: Some(entry),
+        })
+    }
+
+    /// True if the client answers a trivial query. False means the client
+    /// must be discarded, never returned to the idle pool.
+    async fn health_check(&self, client: &mut MssqlClient) -> bool {
+        match client.simple_query("SELECT 1").await {
+            Ok(stream) => stream.into_first_result().await.is_ok(),
+            Err(_) => false,
+        }
+    }
+
+    /// Open a brand-new client (full TCP + TLS + login handshake). Used to
+    /// grow the pool on an idle miss and for the dedicated transaction
+    /// connection, which must not share a pooled slot.
+    async fn connect_new(&self) -> Result<MssqlClient, CoreError> {
+        let tcp = TcpStream::connect(self.config.get_addr())
+            .await
+            .map_err(|e| CoreError::Connection(format!("TCP connect failed: {}", e)))?;
+        tcp.set_nodelay(true).ok();
+
+        Client::connect(self.config.clone(), tcp.compat_write())
+            .await
+            .map_err(|e| CoreError::Connection(e.to_string()))
+    }
+
+    /// Tear the pool down. Idle sockets are dropped immediately; closing the
+    /// semaphore makes it a convenient shutdown latch — pending and future
+    /// `acquire` calls fail, and released clients are dropped, not re-pooled.
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        self.idle.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.semaphore.close();
+    }
+}
+
+/// A checked-out tiberius client with its pool slot attached.
+///
+/// `Deref`/`DerefMut` expose the inner `Client` (which owns the TCP socket
+/// the query API mutates). Dropping the guard returns the client to the
+/// idle pool; if the pool has been closed, the client is dropped outright so
+/// its socket closes promptly.
+struct PooledClient<'a> {
+    pool: &'a MssqlPool,
+    entry: Option<(MssqlClient, OwnedSemaphorePermit)>,
+}
+
+impl std::ops::Deref for PooledClient<'_> {
+    type Target = MssqlClient;
+    fn deref(&self) -> &Self::Target {
+        &self
+            .entry
+            .as_ref()
+            .expect("pooled client used after release")
+            .0
+    }
+}
+
+impl std::ops::DerefMut for PooledClient<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self
+            .entry
+            .as_mut()
+            .expect("pooled client used after release")
+            .0
+    }
+}
+
+impl Drop for PooledClient<'_> {
+    fn drop(&mut self) {
+        if let Some(entry) = self.entry.take() {
+            if self.pool.closed.load(Ordering::SeqCst) {
+                drop(entry);
+            } else {
+                self.pool
+                    .idle
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push_back(entry);
+            }
+        }
+    }
+}
+
+pub struct MssqlDriver {
+    pool: Arc<MssqlPool>,
     database: String,
     /// Held client for transaction mode. When active, all queries run through
-    /// this persistent connection instead of opening fresh ones.
+    /// this persistent connection instead of the pool, so a transaction is
+    /// never split across different physical connections.
     txn_client: TokioMutex<Option<MssqlClient>>,
 }
 
@@ -88,35 +264,34 @@ impl MssqlDriver {
             }
         }
 
-        // Test connect to ensure credentials are valid
+        // Test connect to ensure credentials are valid, then seed the new
+        // pool with the already-logged-in client so that login work isn't
+        // thrown away.
         let tcp = TcpStream::connect(tib_config.get_addr())
             .await
             .map_err(|e| CoreError::Connection(format!("TCP connect failed: {}", e)))?;
         tcp.set_nodelay(true).ok();
 
-        let _client = Client::connect(tib_config.clone(), tcp.compat_write())
+        let client = Client::connect(tib_config.clone(), tcp.compat_write())
             .await
             .map_err(|e| CoreError::Connection(e.to_string()))?;
 
+        let pool = MssqlPool::new(tib_config, MAX_CONNECTIONS);
+        let permit = pool
+            .semaphore
+            .clone()
+            .try_acquire_owned()
+            .expect("a fresh pool has all slots available");
+        pool.idle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push_back((client, permit));
+
         Ok(Self {
-            config: tib_config,
+            pool: Arc::new(pool),
             database: config.database.clone().unwrap_or_default(),
             txn_client: TokioMutex::new(None),
         })
-    }
-
-    // TODO: opens a fresh TCP connection + tiberius handshake on every call —
-    // no connection pooling. Fine for now, but a real perf/resource concern
-    // under load.
-    async fn get_client(&self) -> Result<Client<tokio_util::compat::Compat<TcpStream>>, CoreError> {
-        let tcp = TcpStream::connect(self.config.get_addr())
-            .await
-            .map_err(|e| CoreError::Connection(format!("TCP connect failed: {}", e)))?;
-        tcp.set_nodelay(true).ok();
-
-        Client::connect(self.config.clone(), tcp.compat_write())
-            .await
-            .map_err(|e| CoreError::Connection(e.to_string()))
     }
 }
 
@@ -322,7 +497,7 @@ fn tiberius_rows_to_query_result(
 #[async_trait]
 impl DbConnection for MssqlDriver {
     async fn test_connection(&self) -> Result<(), CoreError> {
-        let mut client = self.get_client().await?;
+        let mut client = self.pool.acquire().await?;
         client
             .simple_query("SELECT 1")
             .await
@@ -330,8 +505,20 @@ impl DbConnection for MssqlDriver {
         Ok(())
     }
 
+    async fn close(&self) {
+        // Tear down the pool (dropping idle sockets) and drop any open
+        // transaction connection. The server rolls back on socket close, but
+        // the frontend dismisses the txn indicator when it sees close(), so
+        // leaving a client in `txn_client` would keep `in_transaction()`
+        // reporting true after disconnect.
+        self.pool.close();
+        if let Some(client) = self.txn_client.lock().await.take() {
+            drop(client);
+        }
+    }
+
     async fn list_databases(&self) -> Result<Vec<String>, CoreError> {
-        let mut client = self.get_client().await?;
+        let mut client = self.pool.acquire().await?;
         let stream = client
             .simple_query("SELECT name FROM sys.databases ORDER BY name")
             .await
@@ -351,7 +538,7 @@ impl DbConnection for MssqlDriver {
 
     async fn create_database(&self, name: &str) -> Result<(), CoreError> {
         super::validate_db_name(name)?;
-        let mut client = self.get_client().await?;
+        let mut client = self.pool.acquire().await?;
         client
             .simple_query(&format!("CREATE DATABASE [{name}]"))
             .await
@@ -360,7 +547,7 @@ impl DbConnection for MssqlDriver {
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>, CoreError> {
-        let mut client = self.get_client().await?;
+        let mut client = self.pool.acquire().await?;
         let stream = client
             .simple_query(
                 "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name",
@@ -382,14 +569,27 @@ impl DbConnection for MssqlDriver {
 
     async fn list_tables(&self, schema: Option<&str>) -> Result<Vec<TableInfo>, CoreError> {
         let schema = schema.unwrap_or("dbo");
-        let mut client = self.get_client().await?;
+        let mut client = self.pool.acquire().await?;
 
+        // Tables + views, functions/procedures (information_schema.ROUTINES)
+        // and DML triggers, so the sidebar can browse all of them.
         let stream = client
             .query(
-                "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE \
-                 FROM information_schema.TABLES \
-                 WHERE TABLE_SCHEMA = @P1 \
-                 ORDER BY TABLE_NAME",
+                "SELECT obj_schema, obj_name, obj_type FROM (
+                    SELECT TABLE_SCHEMA AS obj_schema, TABLE_NAME AS obj_name,
+                           TABLE_TYPE AS obj_type
+                    FROM information_schema.TABLES
+                    UNION ALL
+                    SELECT ROUTINE_SCHEMA, ROUTINE_NAME, ROUTINE_TYPE
+                    FROM information_schema.ROUTINES
+                    UNION ALL
+                    SELECT s.name, t.name, 'trigger'
+                    FROM sys.triggers t
+                    JOIN sys.objects o ON t.parent_id = o.object_id
+                    JOIN sys.schemas s ON o.schema_id = s.schema_id
+                ) objs
+                WHERE obj_schema = @P1
+                ORDER BY obj_name",
                 &[&schema],
             )
             .await
@@ -415,13 +615,50 @@ impl DbConnection for MssqlDriver {
             .collect())
     }
 
+    async fn get_object_ddl(
+        &self,
+        schema: Option<&str>,
+        name: &str,
+        _object_type: &str,
+    ) -> Result<String, CoreError> {
+        let schema = schema.unwrap_or("dbo");
+        let mut client = self.pool.acquire().await?;
+        // sys.sql_modules.definition holds the verbatim CREATE text for
+        // views, functions, procedures and DML triggers alike.
+        let stream = client
+            .query(
+                "SELECT CONVERT(nvarchar(max), m.definition) \
+                 FROM sys.sql_modules m \
+                 JOIN sys.objects o ON o.object_id = m.object_id \
+                 JOIN sys.schemas s ON s.schema_id = o.schema_id \
+                 WHERE s.name = @P1 AND o.name = @P2",
+                &[&schema, &name],
+            )
+            .await
+            .map_err(|e| CoreError::Query(e.to_string()))?;
+
+        let rows = stream
+            .into_first_result()
+            .await
+            .map_err(|e| CoreError::Query(e.to_string()))?;
+
+        let Some(row) = rows.first() else {
+            return Err(CoreError::Query(format!(
+                "No SQL module (DDL) found for {schema}.{name}"
+            )));
+        };
+        row.get::<&str, _>(0)
+            .map(|s| s.to_string())
+            .ok_or_else(|| CoreError::Query(format!("Missing definition for {schema}.{name}")))
+    }
+
     async fn describe_table(
         &self,
         schema: Option<&str>,
         table: &str,
     ) -> Result<(Vec<ColumnInfo>, Vec<IndexInfo>), CoreError> {
         let schema = schema.unwrap_or("dbo");
-        let mut client = self.get_client().await?;
+        let mut client = self.pool.acquire().await?;
 
         let stream = client
             .query(
@@ -528,7 +765,7 @@ impl DbConnection for MssqlDriver {
                     .map_err(|e| CoreError::Query(e.to_string()))?
             } else {
                 drop(txn_guard);
-                let mut client = self.get_client().await?;
+                let mut client = self.pool.acquire().await?;
                 let stream = client
                     .simple_query(sql)
                     .await
@@ -571,7 +808,7 @@ impl DbConnection for MssqlDriver {
             Ok(qr)
         } else {
             drop(txn_guard);
-            let mut client = self.get_client().await?;
+            let mut client = self.pool.acquire().await?;
             let exec_result = client
                 .execute(sql, &[])
                 .await
@@ -665,7 +902,10 @@ impl DbConnection for MssqlDriver {
                 "A transaction is already active".into(),
             ));
         }
-        let mut client = self.get_client().await?;
+        // Transactions need a dedicated connection (never a pooled slot, so
+        // the transaction can't be split across physical connections and its
+        // slot isn't accounted against the shared pool).
+        let mut client = self.pool.connect_new().await?;
         client
             .simple_query("BEGIN TRANSACTION")
             .await

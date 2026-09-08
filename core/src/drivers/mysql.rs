@@ -243,11 +243,24 @@ impl DbConnection for MySqlDriver {
 
     async fn list_tables(&self, schema: Option<&str>) -> Result<Vec<TableInfo>, CoreError> {
         let db = schema.unwrap_or(&self.database);
+        // Tables + views from TABLES, functions/procedures from ROUTINES,
+        // and triggers from TRIGGERS, unioned so the sidebar can browse all
+        // of them. TYPE names are normalized to lower case ("BASE TABLE" →
+        // "table").
         let rows = sqlx::query(
-            "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, TABLE_ROWS \
-             FROM information_schema.TABLES \
-             WHERE TABLE_SCHEMA = ? \
-             ORDER BY TABLE_NAME",
+            "SELECT obj_schema, obj_name, obj_type, obj_rows FROM (
+                SELECT TABLE_SCHEMA AS obj_schema, TABLE_NAME AS obj_name,
+                       TABLE_TYPE AS obj_type, TABLE_ROWS AS obj_rows
+                FROM information_schema.TABLES
+                UNION ALL
+                SELECT ROUTINE_SCHEMA, ROUTINE_NAME, LOWER(ROUTINE_TYPE), NULL
+                FROM information_schema.ROUTINES
+                UNION ALL
+                SELECT TRIGGER_SCHEMA, TRIGGER_NAME, 'trigger', NULL
+                FROM information_schema.TRIGGERS
+            ) objs
+            WHERE obj_schema = ?
+            ORDER BY obj_name",
         )
         .bind(db)
         .fetch_all(&self.pool)
@@ -262,7 +275,7 @@ impl DbConnection for MySqlDriver {
                     .get::<String, _>(2)
                     .to_lowercase()
                     .replace("base table", "table"),
-                // TABLE_ROWS is an estimate for InnoDB, NULL for views.
+                // TABLE_ROWS is an estimate for InnoDB, NULL for other kinds.
                 row_count_estimate: r
                     .try_get::<Option<i64>, _>(3)
                     .ok()
@@ -275,6 +288,74 @@ impl DbConnection for MySqlDriver {
                     }),
             })
             .collect())
+    }
+
+    async fn get_object_ddl(
+        &self,
+        schema: Option<&str>,
+        name: &str,
+        object_type: &str,
+    ) -> Result<String, CoreError> {
+        let db = schema.unwrap_or(&self.database);
+        let qualified = format!(
+            "{}.{}",
+            quote_ident(&ENGINE, db),
+            quote_ident(&ENGINE, name)
+        );
+
+        match object_type {
+            // SHOW CREATE VIEW's definition lives in column 2 (index 1).
+            "view" => {
+                let row = sqlx::query(&format!("SHOW CREATE VIEW {}", qualified))
+                    .fetch_one(&self.pool)
+                    .await?;
+                row.try_get::<String, _>(1)
+                    .map_err(|e| CoreError::Query(format!("Missing SHOW CREATE VIEW result: {}", e)))
+            }
+            // The CREATE FUNCTION / PROCEDURE columns are index 2 for both.
+            "function" | "procedure" => {
+                let kw = if object_type == "function" {
+                    "FUNCTION"
+                } else {
+                    "PROCEDURE"
+                };
+                let row = sqlx::query(&format!("SHOW CREATE {kw} {}", qualified))
+                    .fetch_one(&self.pool)
+                    .await?;
+                row.try_get::<String, _>(2)
+                    .map_err(|e| CoreError::Query(format!("Missing SHOW CREATE {kw} result: {}", e)))
+            }
+            // SHOW CREATE TRIGGER's columns vary across MySQL/MariaDB
+            // versions, so rebuild the DDL from information_schema.TRIGGERS
+            // instead — that shape is stable.
+            "trigger" => {
+                let row = sqlx::query(
+                    "SELECT ACTION_TIMING, EVENT_MANIPULATION, EVENT_OBJECT_TABLE, ACTION_STATEMENT \
+                     FROM information_schema.TRIGGERS \
+                     WHERE TRIGGER_SCHEMA = ? AND TRIGGER_NAME = ?",
+                )
+                .bind(db)
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or_else(|| CoreError::Query(format!("No trigger named {name}")))?;
+                let timing: String = row.get(0);
+                let event: String = row.get(1);
+                let table: String = row.get(2);
+                let statement: String = row.get(3);
+                Ok(format!(
+                    "CREATE TRIGGER {} {} {} ON {} FOR EACH ROW\n{}",
+                    quote_ident(&ENGINE, name),
+                    timing,
+                    event,
+                    quote_ident(&ENGINE, &table),
+                    statement
+                ))
+            }
+            other => Err(CoreError::Unsupported(format!(
+                "MySQL DDL reconstruction is not supported for '{other}' objects"
+            ))),
+        }
     }
 
     async fn describe_table(

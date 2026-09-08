@@ -149,6 +149,21 @@ pub async fn describe_table(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn get_object_ddl(
+    state: State<'_, AppState>,
+    conn_id: String,
+    schema: Option<String>,
+    name: String,
+    object_type: String,
+) -> Result<String, String> {
+    let driver = driver_for(&state, &conn_id).await?;
+    driver
+        .get_object_ddl(schema.as_deref(), &name, &object_type)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // ── Query execution ───────────────────────────────────────────────────────────
 
 /// Execute a single SQL statement and return its result. The DB round-trip is

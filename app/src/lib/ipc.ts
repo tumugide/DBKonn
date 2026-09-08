@@ -142,6 +142,8 @@ export const ipc = {
   listSchemas:         (connId: string)                                         => invoke<SchemaInfo[]>("list_schemas", { connId }),
   listTables:          (connId: string, schema?: string)                        => invoke<TableInfo[]>("list_tables", { connId, schema }),
   describeTable:       (connId: string, schema: string|undefined, table: string) => withTimeout(invoke<[ColumnInfo[], IndexInfo[]]>("describe_table", { connId, schema, table }), `describe ${table}`),
+  getObjectDdl:        (connId: string, schema: string|undefined, name: string, objectType: string) =>
+                         withTimeout(invoke<string>("get_object_ddl", { connId, schema, name, objectType }), `ddl ${name}`),
 
   executeQuery:        (connId: string, sql: string, requestId: string)          => invoke<QueryResult>("execute_query", { connId, sql, requestId }),
   cancelQuery:         (requestId: string)                                        => invoke<void>("cancel_query", { requestId }),

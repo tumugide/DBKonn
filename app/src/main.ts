@@ -19,6 +19,7 @@ import { RecordPanel } from "./components/RecordPanel";
 import { showConnectionModal } from "./components/ConnectionModal";
 import { showCreateDatabaseModal } from "./components/CreateDatabaseModal";
 import { showStructureModal } from "./components/StructureModal";
+import { showDdlModal } from "./components/DdlView";
 import { escapeHtml as esc } from "./lib/escape";
 import { wireModalDismissal } from "./lib/modal";
 import { createExportButton } from "./components/ExportMenu";
@@ -324,7 +325,7 @@ function renderSidebar() {
     // Table tree
     buf.push(`
       <div class="tree-header">
-        <span>Tables <span class="tree-count" id="sb-tree-count">${ac.tables.length}</span></span>
+        <span>Objects <span class="tree-count" id="sb-tree-count">${ac.tables.length}</span></span>
       </div>
       <div style="flex:1;overflow-y:auto;" id="sb-table-tree"></div>
     `);
@@ -397,6 +398,12 @@ function tableIcon(type: string | undefined): string {
       return "◈";
     case "foreign table":
       return "⊟";
+    case "function":
+      return "ƒ";
+    case "procedure":
+      return "λ";
+    case "trigger":
+      return "⚡";
     default:
       return "▦";
   }
@@ -420,11 +427,39 @@ function tableListSignature(ac: ConnSession): string {
     .join("");
 }
 
-// Rebuilds just the table-list container, without touching the DB/schema
+// Object types that have columns and rows (open a browseable table tab) vs.
+// code/behavior objects (a function, procedure or trigger is *viewed*, not
+// browsed — clicking one shows its DDL).
+const RELATIONAL_OBJECTS = new Set(["table", "view", "materialized view", "foreign table"]);
+
+// Group + render order for the sidebar object tree.
+const OBJECT_GROUPS: { type: string; label: string }[] = [
+  { type: "table", label: "Tables" },
+  { type: "view", label: "Views" },
+  { type: "materialized view", label: "Materialized views" },
+  { type: "foreign table", label: "Foreign tables" },
+  { type: "function", label: "Functions" },
+  { type: "procedure", label: "Procedures" },
+  { type: "trigger", label: "Triggers" },
+];
+
+// Fetch and show the CREATE definition of a code object (function, procedure
+// or trigger) in the read-only DDL modal.
+async function showObjectDdl(ac: ConnSession, objectType: string, name: string) {
+  try {
+    const ddl = await ipc.getObjectDdl(ac.connId, schemaForEngine(), name, objectType);
+    const scope = schemaForEngine();
+    showDdlModal(`${scope ? scope + "." : ""}${name}`, ddl);
+  } catch (e) {
+    alert(`Failed to load DDL for ${name}:\n${e}`);
+  }
+}
+
+// Rebuilds just the object-list container, without touching the DB/schema
 // dropdowns — used by both the initial renderSidebar() build and
 // refreshSchemaTree(), so there's one source of truth for the tree-item markup.
 //
-// The rebuild is skipped when the table list is unchanged. The 30s background
+// The rebuild is skipped when the object list is unchanged. The 30s background
 // refresh used to blow away and recreate every row unconditionally, which
 // reset the tree's scroll position to the top and reflowed the list under a
 // stationary pointer — so a click landed on whatever table had shifted under
@@ -444,7 +479,15 @@ function renderTableTree(ac: ConnSession) {
       const item = (e.target as HTMLElement | null)?.closest<HTMLElement>(".tree-item");
       const tableName = item?.dataset["table"];
       if (!tableName) return;
-      openOrCreateTableTab(tableName, appState.activeConn.value?.selectedSchema);
+      const ac = appState.activeConn.value;
+      if (!ac) return;
+      const objectType = item.dataset["type"] ?? "table";
+      // Non-relational objects are browsed by showing their definition.
+      if (!RELATIONAL_OBJECTS.has(objectType)) {
+        void showObjectDdl(ac, objectType, tableName);
+        return;
+      }
+      openOrCreateTableTab(tableName, ac.selectedSchema);
     });
   }
 
@@ -455,18 +498,23 @@ function renderTableTree(ac: ConnSession) {
   }
 
   const prevScroll = treeEl.scrollTop;
-  treeEl.innerHTML = ac.tables
-    .map((t) => {
-      const active = t.name === ac.selectedTable ? " active" : "";
-      const count = compactCount(t.row_count_estimate);
-      const typeLabel = t.table_type && t.table_type !== "table" ? ` · ${t.table_type}` : "";
-      return `<div class="tree-item${active}" data-table="${esc(t.name)}" title="${esc(t.name)}${typeLabel}${count ? ` · ~${t.row_count_estimate} rows` : ""}">
-        <span class="tree-item-icon">${tableIcon(t.table_type)}</span>
-        <span class="tree-item-name">${esc(t.name)}</span>
-        ${count ? `<span class="tree-item-count">${count}</span>` : ""}
-      </div>`;
-    })
-    .join("");
+  treeEl.innerHTML = OBJECT_GROUPS.map(({ type, label }) => {
+    const objects = ac.tables.filter((t) => (t.table_type ?? "table") === type);
+    if (objects.length === 0) return "";
+    const nodes = objects
+      .map((t) => {
+        const active = t.name === ac.selectedTable ? " active" : "";
+        const count = compactCount(t.row_count_estimate);
+        const typeLabel = t.table_type && t.table_type !== "table" ? ` · ${t.table_type}` : "";
+        return `<div class="tree-item${active}" data-table="${esc(t.name)}" data-type="${esc(t.table_type ?? "table")}" title="${esc(t.name)}${typeLabel}${count ? ` · ~${t.row_count_estimate} rows` : ""}">
+          <span class="tree-item-icon">${tableIcon(t.table_type)}</span>
+          <span class="tree-item-name">${esc(t.name)}</span>
+          ${count ? `<span class="tree-item-count">${count}</span>` : ""}
+        </div>`;
+      })
+      .join("");
+    return `<div class="tree-group">${esc(label)} <span class="tree-group-count">${objects.length}</span></div>${nodes}`;
+  }).join("");
   treeEl.dataset["signature"] = signature;
   treeEl.scrollTop = prevScroll;
 }
@@ -1081,7 +1129,11 @@ async function loadSchemaForEditor(connId: string, schema?: string) {
   try {
     const tables = await ipc.listTables(connId, schema);
     const tableSchemas: { name: string; columns: ColumnInfo[] }[] = [];
-    const toDescribe = tables.slice(0, 50);
+    // list_tables now also returns functions/procedures/triggers; only
+    // relational objects have columns worth describing for autocomplete.
+    const toDescribe = tables
+      .filter((t) => RELATIONAL_OBJECTS.has(t.table_type ?? "table"))
+      .slice(0, 50);
     // Fetch a few tables at a time rather than all at once — firing every
     // describe_table call concurrently right after connecting can open a burst of
     // brand-new pool connections (up to the pool's max_connections) at once,

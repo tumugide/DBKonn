@@ -610,6 +610,23 @@ body {
     font-weight: 400;
     color: var(--text-faint);
 }
+.tree-group {
+    padding: 8px 10px 2px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.tree-group-count {
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text-faint);
+}
 .tree-item {
     padding: 5px 10px 5px 18px;
     margin: 0 4px;

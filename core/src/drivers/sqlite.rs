@@ -211,7 +211,7 @@ impl DbConnection for SqliteDriver {
     async fn list_tables(&self, _schema: Option<&str>) -> Result<Vec<TableInfo>, CoreError> {
         let rows = sqlx::query(
             "SELECT name, type FROM sqlite_master \
-             WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' \
+             WHERE type IN ('table','view','trigger') AND name NOT LIKE 'sqlite_%' \
              ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -226,6 +226,25 @@ impl DbConnection for SqliteDriver {
                 row_count_estimate: None,
             })
             .collect())
+    }
+
+    async fn get_object_ddl(
+        &self,
+        _schema: Option<&str>,
+        name: &str,
+        object_type: &str,
+    ) -> Result<String, CoreError> {
+        // sqlite_master stores the original CREATE statement verbatim for
+        // tables, views and triggers — `sql` is NULL only for automatically
+        // created index rows.
+        let row = sqlx::query("SELECT sql FROM sqlite_master WHERE type = ? AND name = ?")
+            .bind(object_type)
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| CoreError::Query(format!("No {object_type} named {name} in sqlite_master")))?;
+        row.try_get::<String, _>(0)
+            .map_err(|e| CoreError::Query(format!("No DDL for {name}: {}", e)))
     }
 
     async fn describe_table(

@@ -55,6 +55,22 @@ pub trait DbConnection: Send + Sync {
         where_clause: Option<&str>,
     ) -> Result<i64, CoreError>;
 
+    /// Return the CREATE definition (DDL) for a schema object. `object_type`
+    /// is one of the `TableInfo.table_type` values — "view",
+    /// "materialized view", "function", "procedure", "trigger", …
+    /// Not every driver can reconstruct every kind; unsupported combinations
+    /// return `Unsupported`.
+    async fn get_object_ddl(
+        &self,
+        _schema: Option<&str>,
+        _name: &str,
+        _object_type: &str,
+    ) -> Result<String, CoreError> {
+        Err(CoreError::Unsupported(
+            "DDL retrieval is not supported for this driver".into(),
+        ))
+    }
+
     /// Close the underlying connection pool (if any) so server-side
     /// connections are released promptly on disconnect rather than lingering
     /// until the handle is dropped. Default: no-op (for poolless drivers).
