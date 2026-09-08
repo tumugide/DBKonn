@@ -129,6 +129,7 @@ pub fn run() {
             commands::list_tables,
             commands::describe_table,
             commands::get_object_ddl,
+            commands::alter_table,
             commands::execute_query,
             commands::cancel_query,
             commands::fetch_table_rows,

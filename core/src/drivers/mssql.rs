@@ -10,6 +10,7 @@ use tokio::sync::{Mutex as TokioMutex, OwnedSemaphorePermit, Semaphore};
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 use crate::{
+    alter::{self, AlterRequest},
     connection::{ConnectionConfig, DbEngine, SslMode},
     error::CoreError,
     ident::quote_ident,
@@ -820,6 +821,26 @@ impl DbConnection for MssqlDriver {
         };
 
         result
+    }
+
+    async fn alter_table(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        request: &AlterRequest,
+    ) -> Result<String, CoreError> {
+        // RENAME COLUMN emits `EXEC sp_rename`, which cannot run inside an
+        // explicit transaction — so if the user has one open, don't hold it.
+        if matches!(request, AlterRequest::RenameColumn { .. }) {
+            let sql = alter::build_alter_sql(ENGINE, schema, table, request)
+                .map_err(CoreError::Query)?;
+            self.execute_query(&sql).await?;
+            return Ok(sql);
+        }
+        let sql = alter::build_alter_sql(ENGINE, schema, table, request)
+            .map_err(CoreError::Query)?;
+        self.execute_query(&sql).await?;
+        Ok(sql)
     }
 
     async fn fetch_table_rows(

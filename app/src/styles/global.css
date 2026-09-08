@@ -1335,6 +1335,44 @@ label {
     color: var(--text-muted);
     margin: 4px 0 8px;
 }
+.structure-editor {
+    background: color-mix(in srgb, var(--bg-base) 45%, transparent);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    margin-bottom: 8px;
+}
+.structure-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+}
+.structure-msg {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.structure-msg-error {
+    color: var(--accent-red);
+}
+.structure-status {
+    margin-right: auto;
+}
+.structure-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin: 0;
+}
+.structure-check input {
+    margin: 0;
+}
+.structure-editor select,
+.structure-editor input[type="text"] {
+    width: 100%;
+}
 
 /* ── Status bar ──────────────────────────────────────────────────────────── */
 .status-bar {

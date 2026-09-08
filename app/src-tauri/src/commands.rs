@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use dbkonn_core::{
+    alter::AlterRequest,
     connection::ConnectionConfig,
     drivers::{self, DbConnection},
     query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, SavedQuery, SchemaInfo, TableInfo},
@@ -160,6 +161,21 @@ pub async fn get_object_ddl(
     let driver = driver_for(&state, &conn_id).await?;
     driver
         .get_object_ddl(schema.as_deref(), &name, &object_type)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn alter_table(
+    state: State<'_, AppState>,
+    conn_id: String,
+    schema: Option<String>,
+    table: String,
+    request: AlterRequest,
+) -> Result<String, String> {
+    let driver = driver_for(&state, &conn_id).await?;
+    driver
+        .alter_table(schema.as_deref(), &table, &request)
         .await
         .map_err(|e| e.to_string())
 }

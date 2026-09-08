@@ -1,3 +1,4 @@
+pub mod alter;
 pub mod connection;
 pub mod drivers;
 pub mod error;

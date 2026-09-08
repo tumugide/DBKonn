@@ -9,6 +9,7 @@ use sqlx::{
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::{
+    alter::{self, AlterRequest},
     connection::{ConnectionConfig, DbEngine},
     error::CoreError,
     ident::quote_ident,
@@ -355,6 +356,18 @@ impl DbConnection for SqliteDriver {
 
         drop(txn_guard);
         Ok(result)
+    }
+
+    async fn alter_table(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        request: &AlterRequest,
+    ) -> Result<String, CoreError> {
+        let sql = alter::build_alter_sql(ENGINE, schema, table, request)
+            .map_err(CoreError::Query)?;
+        self.execute_query(&sql).await?;
+        Ok(sql)
     }
 
     async fn fetch_table_rows(

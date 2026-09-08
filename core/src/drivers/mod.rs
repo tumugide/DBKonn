@@ -4,6 +4,7 @@ pub mod mysql;
 pub mod mssql;
 
 use crate::{
+    alter::AlterRequest,
     connection::ConnectionConfig,
     error::CoreError,
     query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, SchemaInfo, TableInfo},
@@ -37,6 +38,21 @@ pub trait DbConnection: Send + Sync {
 
     /// Execute arbitrary SQL and return results.
     async fn execute_query(&self, sql: &str) -> Result<QueryResult, CoreError>;
+
+    /// Apply one atomic structure mutation (column/index add/drop/rename).
+    /// Returns the generated, dialect-aware ALTER SQL as the confirmation
+    /// message. Identifiers and DEFAULT literals are never string-built
+    /// without quoting (see `alter.rs`).
+    async fn alter_table(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+        _request: &AlterRequest,
+    ) -> Result<String, CoreError> {
+        Err(CoreError::Unsupported(
+            "Structure editing is not supported for this driver".into(),
+        ))
+    }
 
     /// Fetch a paginated, optionally filtered page of rows from a table.
     async fn fetch_table_rows(

@@ -85,6 +85,15 @@ export interface ParseError {
   col?: number;
 }
 
+// Hand-mirrors `AlterRequest` in core/src/alter.rs (serde `tag="op"`,
+// `rename_all="snake_case"`).
+export type AlterRequest =
+  | { op: "add_column"; name: string; data_type: string; nullable: boolean; default_value?: string }
+  | { op: "drop_column"; name: string }
+  | { op: "rename_column"; old_name: string; new_name: string }
+  | { op: "create_index"; name: string; columns: string[]; unique: boolean }
+  | { op: "drop_index"; name: string };
+
 export interface SavedQuery {
   id: string;
   conn_id: string;
@@ -144,6 +153,8 @@ export const ipc = {
   describeTable:       (connId: string, schema: string|undefined, table: string) => withTimeout(invoke<[ColumnInfo[], IndexInfo[]]>("describe_table", { connId, schema, table }), `describe ${table}`),
   getObjectDdl:        (connId: string, schema: string|undefined, name: string, objectType: string) =>
                          withTimeout(invoke<string>("get_object_ddl", { connId, schema, name, objectType }), `ddl ${name}`),
+  alterTable:          (connId: string, schema: string|undefined, table: string, request: AlterRequest) =>
+                         withTimeout(invoke<string>("alter_table", { connId, schema, table, request }), `alter ${table}`),
 
   executeQuery:        (connId: string, sql: string, requestId: string)          => invoke<QueryResult>("execute_query", { connId, sql, requestId }),
   cancelQuery:         (requestId: string)                                        => invoke<void>("cancel_query", { requestId }),

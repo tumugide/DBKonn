@@ -1206,7 +1206,31 @@ function renderTableTabContent(_tab: TableTab) {
   structureBtn.onclick = () => {
     const cols = appState.tableMetadata.value;
     const label = `${schemaForEngine() ? schemaForEngine() + "." : ""}${ac.selectedTable}`;
-    showStructureModal(label, cols, lastIndexes);
+    const ac2 = appState.activeConn.value;
+    if (!ac2) return;
+    showStructureModal({
+      tableLabel: label,
+      columns: cols,
+      indexes: lastIndexes,
+      engine: ac2.config.engine,
+      onAlter: async (request) => {
+        await ipc.alterTable(
+          ac2.connId,
+          schemaForEngine(),
+          ac2.selectedTable!,
+          request,
+        );
+        // Refresh the grid columns + rows so the change is visible immediately.
+        await loadTableMetadata();
+        await loadTableData();
+        void refreshSchemaTree();
+      },
+      onReload: async () => {
+        const f = await loadTableMetadata();
+        if (!f) throw new Error("Failed to reload table metadata");
+        return { columns: f.columns, indexes: f.indexes };
+      },
+    });
   };
 
   const exportBtn = createExportButton({
@@ -1397,9 +1421,9 @@ function renderTableTabContent(_tab: TableTab) {
     recordPanel?.showInsert(draft);
   }
 
-  async function loadTableMetadata() {
+  async function loadTableMetadata(): Promise<{ columns: ColumnInfo[]; indexes: IndexInfo[] } | null> {
     const ac2 = appState.activeConn.value;
-    if (!ac2?.selectedTable) return;
+    if (!ac2?.selectedTable) return null;
     try {
       const [columns, indexes] = await ipc.describeTable(
         ac2.connId,
@@ -1409,8 +1433,10 @@ function renderTableTabContent(_tab: TableTab) {
       lastIndexes = indexes;
       appState.tableMetadata.set(columns);
       recordPanel?.setColumns(columns);
+      return { columns, indexes };
     } catch (e) {
       console.warn("Failed to load table metadata:", e);
+      return null;
     }
   }
 
