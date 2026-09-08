@@ -16,7 +16,7 @@ All frontend work uses **Bun** (`app/bun.lock` is authoritative; the stray `app/
 | Frontend only (Vite, port 5173, strict) | `cd app && bun run dev` |
 | Typecheck + frontend build | `cd app && bun run build` (`tsc && vite build`) |
 | Production app bundle | `cd app && bunx tauri build --target aarch64-apple-darwin` |
-| Production bundle *with updater* (CI-style) | `cd app/src-tauri && TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/dbkonn.key)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" cargo tauri build --target aarch64-apple-darwin --config tauri.updater.conf.json` |
+| Production bundle *with updater* (CI-style) | `cd app/src-tauri && TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/dbkonn.key)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat ~/.tauri/dbkonn.key.pass)" cargo tauri build --target aarch64-apple-darwin --config tauri.updater.conf.json` |
 | Build everything (Rust) | `cargo build` |
 | Core library tests | `cargo test -p dbkonn-core` |
 | One Rust test | `cargo test -p dbkonn-core <test_name>` (e.g. `quotes_identifiers_per_dialect`) |
@@ -91,8 +91,9 @@ Reliability patterns already in place (preserve them):
 
 ## Update signing
 
-- Keypair lives at `~/.tauri/dbkonn.key` (+ `.key.pub`), generated with `cargo tauri signer generate --ci -w ~/.tauri/dbkonn.key`. **Losing it breaks updates for installed apps forever**; back it up.
-- The *public* half is committed in `app/src-tauri/tauri.updater.conf.json` (base64 of the `.key.pub` text, including the `untrusted comment:` header/newline — it is intentionally *not* the raw text). The *private* key must be set as the GitHub Actions repo secrets `TAURI_SIGNING_PRIVATE_KEY` (the file content) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (empty — the generated key has no password). Both env vars are exported during the CI build step; passing an empty password explicitly keeps `tauri build` from prompting for a TTY.
+- Keypair lives at `~/.tauri/dbkonn.key` (+ `.key.pub`), generated with `cargo tauri signer generate --ci -p '<password>' -w ~/.tauri/dbkonn.key`. The password is stored at `~/.tauri/dbkonn.key.pass` (chmod 600). **Losing either the key or the password breaks updates for installed apps forever**; back both up.
+- The *public* half is committed in `app/src-tauri/tauri.updater.conf.json` (base64 of the `.key.pub` text, including the `untrusted comment:` header/newline — it is intentionally *not* the raw text). The *private* key and its password must be set as the GitHub Actions repo secrets `TAURI_SIGNING_PRIVATE_KEY` (the file content) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (the password from `~/.tauri/dbkonn.key.pass` — it is **not** empty). Both env vars are exported during the CI build step; local release builds read them from the two files (see the command table above).
+- The key was replaced once (F20): the first key had no password, which GitHub secrets couldn't represent (an empty `*_PASSWORD` secret isn't possible, so CI failed with "Wrong password for that key"). The current pubkey in `tauri.updater.conf.json` matches the password-protected key under `~/.tauri/dbkonn.key`. No update had shipped before the replacement, so there's no old-key lock-in to migrate.
 
 ## Notes
 

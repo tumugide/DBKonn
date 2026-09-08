@@ -97,8 +97,8 @@ jobs:
         working-directory: app/src-tauri
         env:
           # Used by tauri-bundler to sign the updater artifacts (the .app.tar.gz
-          # + .sig). Secrets must be added to the repo: the private key content
-          # (no password on the generated key) + empty password.
+          # + .sig). Secrets: the private key content from ~/.tauri/dbkonn.key and
+          # the key's password from ~/.tauri/dbkonn.key.pass.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: cargo tauri build --target aarch64-apple-darwin --config tauri.updater.conf.json
