@@ -610,6 +610,23 @@ body {
     font-weight: 400;
     color: var(--text-faint);
 }
+.tree-group {
+    padding: 8px 10px 2px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.tree-group-count {
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text-faint);
+}
 .tree-item {
     padding: 5px 10px 5px 18px;
     margin: 0 4px;
@@ -994,6 +1011,17 @@ table.data-grid td.bool-false {
 table.data-grid td.json-cell {
     color: var(--accent-yellow);
 }
+table.data-grid td.fk-cell {
+    color: var(--accent-blue);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+table.data-grid tr.selected td.fk-cell,
+table.data-grid td.fk-cell:hover {
+    color: var(--accent-blue);
+    filter: brightness(1.2);
+}
 
 /* ── Pagination ──────────────────────────────────────────────────────────── */
 .pagination {
@@ -1317,6 +1345,44 @@ label {
     font-size: 11.5px;
     color: var(--text-muted);
     margin: 4px 0 8px;
+}
+.structure-editor {
+    background: color-mix(in srgb, var(--bg-base) 45%, transparent);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    margin-bottom: 8px;
+}
+.structure-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+}
+.structure-msg {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.structure-msg-error {
+    color: var(--accent-red);
+}
+.structure-status {
+    margin-right: auto;
+}
+.structure-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin: 0;
+}
+.structure-check input {
+    margin: 0;
+}
+.structure-editor select,
+.structure-editor input[type="text"] {
+    width: 100%;
 }
 
 /* ── Status bar ──────────────────────────────────────────────────────────── */

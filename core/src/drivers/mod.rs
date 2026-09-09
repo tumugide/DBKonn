@@ -4,9 +4,12 @@ pub mod mysql;
 pub mod mssql;
 
 use crate::{
+    alter::AlterRequest,
     connection::ConnectionConfig,
     error::CoreError,
-    query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, SchemaInfo, TableInfo},
+    query::{
+        ColumnInfo, ForeignKeyInfo, IndexInfo, PageRequest, QueryResult, SchemaInfo, TableInfo,
+    },
 };
 use async_trait::async_trait;
 
@@ -35,8 +38,33 @@ pub trait DbConnection: Send + Sync {
         table: &str,
     ) -> Result<(Vec<ColumnInfo>, Vec<IndexInfo>), CoreError>;
 
+    /// List foreign-key constraints that reference or are referenced by
+    /// `schema.table` (both directions; see `ForeignKeyInfo`).
+    async fn list_foreign_keys(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<ForeignKeyInfo>, CoreError> {
+        Ok(vec![])
+    }
+
     /// Execute arbitrary SQL and return results.
     async fn execute_query(&self, sql: &str) -> Result<QueryResult, CoreError>;
+
+    /// Apply one atomic structure mutation (column/index add/drop/rename).
+    /// Returns the generated, dialect-aware ALTER SQL as the confirmation
+    /// message. Identifiers and DEFAULT literals are never string-built
+    /// without quoting (see `alter.rs`).
+    async fn alter_table(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+        _request: &AlterRequest,
+    ) -> Result<String, CoreError> {
+        Err(CoreError::Unsupported(
+            "Structure editing is not supported for this driver".into(),
+        ))
+    }
 
     /// Fetch a paginated, optionally filtered page of rows from a table.
     async fn fetch_table_rows(
@@ -54,6 +82,22 @@ pub trait DbConnection: Send + Sync {
         table: &str,
         where_clause: Option<&str>,
     ) -> Result<i64, CoreError>;
+
+    /// Return the CREATE definition (DDL) for a schema object. `object_type`
+    /// is one of the `TableInfo.table_type` values — "view",
+    /// "materialized view", "function", "procedure", "trigger", …
+    /// Not every driver can reconstruct every kind; unsupported combinations
+    /// return `Unsupported`.
+    async fn get_object_ddl(
+        &self,
+        _schema: Option<&str>,
+        _name: &str,
+        _object_type: &str,
+    ) -> Result<String, CoreError> {
+        Err(CoreError::Unsupported(
+            "DDL retrieval is not supported for this driver".into(),
+        ))
+    }
 
     /// Close the underlying connection pool (if any) so server-side
     /// connections are released promptly on disconnect rather than lingering

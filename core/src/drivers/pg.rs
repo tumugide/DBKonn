@@ -5,10 +5,14 @@ use sqlx::{postgres::PgPoolOptions, Column, PgPool, Row, TypeInfo, ValueRef};
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::{
+    alter::{self, AlterRequest},
     connection::{ConnectionConfig, DbEngine},
     error::CoreError,
-    ident::quote_ident,
-    query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo, TableInfo},
+    ident::{quote_ident, render_keyset_value},
+    query::{
+        ColumnInfo, ForeignKeyInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo,
+        TableInfo,
+    },
     validator::validate_where_clause,
 };
 
@@ -346,14 +350,38 @@ impl DbConnection for PgDriver {
         // `list_schemas` — which reads pg_namespace — still showed the
         // schema. pg_class also surfaces materialized views, foreign tables
         // and partitioned tables, which information_schema.tables omits.
+        // Routines (pg_proc) and triggers (pg_trigger) are unioned in so the
+        // sidebar can browse them and show their DDL.
         let rows = sqlx::query(
-            "SELECT n.nspname, c.relname, c.relkind::text, \
-                    CASE WHEN c.reltuples < 0 THEN NULL ELSE c.reltuples::bigint END \
-             FROM pg_catalog.pg_class c \
-             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
-             WHERE n.nspname = $1 \
-               AND c.relkind = ANY(ARRAY['r','p','v','m','f']::\"char\"[]) \
-             ORDER BY c.relname",
+            "SELECT obj_schema, obj_name, obj_type, row_est FROM (
+                SELECT n.nspname AS obj_schema, c.relname AS obj_name,
+                       CASE c.relkind
+                         WHEN 'r' THEN 'table'
+                         WHEN 'p' THEN 'table'
+                         WHEN 'v' THEN 'view'
+                         WHEN 'm' THEN 'materialized view'
+                         WHEN 'f' THEN 'foreign table'
+                       END AS obj_type,
+                       CASE WHEN c.reltuples < 0 THEN NULL ELSE c.reltuples::bigint END AS row_est
+                FROM pg_catalog.pg_class c
+                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = $1
+                  AND c.relkind = ANY(ARRAY['r','p','v','m','f']::\"char\"[])
+                UNION ALL
+                SELECT n.nspname, p.proname,
+                       CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END,
+                       NULL
+                FROM pg_catalog.pg_proc p
+                JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = $1 AND p.prokind IN ('f','p')
+                UNION ALL
+                SELECT n.nspname, t.tgname, 'trigger', NULL
+                FROM pg_catalog.pg_trigger t
+                JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = $1 AND NOT t.tgisinternal
+            ) objs
+            ORDER BY obj_type, obj_name",
         )
         .bind(schema)
         .fetch_all(&self.pool)
@@ -361,24 +389,90 @@ impl DbConnection for PgDriver {
 
         Ok(rows
             .iter()
-            .map(|r| {
-                let relkind: String = r.get(2);
-                let table_type = match relkind.as_str() {
-                    "v" => "view",
-                    "m" => "materialized view",
-                    "f" => "foreign table",
-                    _ => "table", // 'r' ordinary, 'p' partitioned
-                }
-                .to_string();
-                TableInfo {
-                    schema: r.get::<String, _>(0),
-                    name: r.get::<String, _>(1),
-                    table_type,
-                    // reltuples is -1 until the table is first ANALYZEd.
-                    row_count_estimate: r.try_get::<Option<i64>, _>(3).ok().flatten(),
-                }
+            .map(|r| TableInfo {
+                schema: r.get::<String, _>(0),
+                name: r.get::<String, _>(1),
+                table_type: r.get::<String, _>(2),
+                // reltuples is -1 until the table is first ANALYZEd.
+                row_count_estimate: r.try_get::<Option<i64>, _>(3).ok().flatten(),
             })
             .collect())
+    }
+
+    async fn get_object_ddl(
+        &self,
+        schema: Option<&str>,
+        name: &str,
+        object_type: &str,
+    ) -> Result<String, CoreError> {
+        let schema = schema.unwrap_or("public");
+        match object_type {
+            // pg_get_viewdef returns just the SELECT body — reconstruct the
+            // full CREATE VIEW / MATERIALIZED VIEW header around it.
+            "view" | "materialized view" => {
+                let row = sqlx::query(
+                    "SELECT pg_get_viewdef(c.oid, true) AS def, c.relkind::text AS relkind \
+                     FROM pg_catalog.pg_class c \
+                     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+                     WHERE n.nspname = $1 AND c.relname = $2 \
+                       AND c.relkind = ANY(ARRAY['v','m']::\"char\"[])",
+                )
+                .bind(schema)
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or_else(|| CoreError::Query(format!("No view named {name}")))?;
+                let def: String = row.get(0);
+                let relkind: String = row.get(1);
+                let kw = if relkind == "m" {
+                    "MATERIALIZED VIEW"
+                } else {
+                    "VIEW"
+                };
+                Ok(format!(
+                    "CREATE {kw} {}.{} AS\n{def}",
+                    quote_ident(&ENGINE, schema),
+                    quote_ident(&ENGINE, name)
+                ))
+            }
+            "function" | "procedure" => {
+                // Overloaded functions share a name — return the first
+                // signature's definition.
+                let row = sqlx::query(
+                    "SELECT pg_get_functiondef(p.oid) AS def \
+                     FROM pg_catalog.pg_proc p \
+                     JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace \
+                     WHERE n.nspname = $1 AND p.proname = $2 \
+                     ORDER BY p.oid \
+                     LIMIT 1",
+                )
+                .bind(schema)
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or_else(|| CoreError::Query(format!("No routine named {name}")))?;
+                Ok(row.get::<String, _>(0))
+            }
+            "trigger" => {
+                let row = sqlx::query(
+                    "SELECT pg_get_triggerdef(t.oid) AS def \
+                     FROM pg_catalog.pg_trigger t \
+                     JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid \
+                     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+                     WHERE n.nspname = $1 AND t.tgname = $2 AND NOT t.tgisinternal \
+                     LIMIT 1",
+                )
+                .bind(schema)
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or_else(|| CoreError::Query(format!("No trigger named {name}")))?;
+                Ok(row.get::<String, _>(0))
+            }
+            other => Err(CoreError::Unsupported(format!(
+                "Postgres DDL reconstruction is not supported for '{other}' objects"
+            ))),
+        }
     }
 
     async fn describe_table(
@@ -509,6 +603,57 @@ impl DbConnection for PgDriver {
         Ok((columns, indexes))
     }
 
+    async fn list_foreign_keys(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<ForeignKeyInfo>, CoreError> {
+        let schema = schema.unwrap_or("public");
+        // Every FK where `schema.table` is either the child (conrelid) or the
+        // parent (confrelid). Local columns come from conkey, foreign columns
+        // from confkey, both in positional order.
+        let rows = sqlx::query(
+            "SELECT
+                con.conname,
+                cn.nspname AS local_schema,
+                cl.relname AS local_table,
+                (SELECT array_agg(la.attname ORDER BY u.ord)
+                   FROM unnest(con.conkey) WITH ORDINALITY u(attnum, ord)
+                   JOIN pg_attribute la ON la.attrelid = con.conrelid AND la.attnum = u.attnum) AS local_cols,
+                rn.nspname AS foreign_schema,
+                rl.relname AS foreign_table,
+                (SELECT array_agg(ra.attname ORDER BY u2.ord)
+                   FROM unnest(con.confkey) WITH ORDINALITY u2(attnum, ord)
+                   JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = u2.attnum) AS foreign_cols
+             FROM pg_catalog.pg_constraint con
+             JOIN pg_catalog.pg_class cl ON cl.oid = con.conrelid
+             JOIN pg_catalog.pg_namespace cn ON cn.oid = cl.relnamespace
+             JOIN pg_catalog.pg_class rl ON rl.oid = con.confrelid
+             JOIN pg_catalog.pg_namespace rn ON rn.oid = rl.relnamespace
+             WHERE con.contype = 'f'
+               AND ((cn.nspname = $1 AND cl.relname = $2)
+                 OR (rn.nspname = $1 AND rl.relname = $2))
+             ORDER BY con.conname",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|r| ForeignKeyInfo {
+                name: r.get(0),
+                schema: r.get(1),
+                local_table: r.get(2),
+                local_columns: r.try_get::<Vec<String>, _>(3).unwrap_or_default(),
+                foreign_schema: r.get(4),
+                foreign_table: r.get(5),
+                foreign_columns: r.try_get::<Vec<String>, _>(6).unwrap_or_default(),
+            })
+            .collect())
+    }
+
     async fn execute_query(&self, sql: &str) -> Result<QueryResult, CoreError> {
         let start = Instant::now();
 
@@ -561,6 +706,18 @@ impl DbConnection for PgDriver {
         Ok(result)
     }
 
+    async fn alter_table(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        request: &AlterRequest,
+    ) -> Result<String, CoreError> {
+        let sql = alter::build_alter_sql(ENGINE, schema, table, request)
+            .map_err(CoreError::Query)?;
+        self.execute_query(&sql).await?;
+        Ok(sql)
+    }
+
     async fn fetch_table_rows(
         &self,
         schema: Option<&str>,
@@ -577,21 +734,44 @@ impl DbConnection for PgDriver {
             quote_ident(&ENGINE, table)
         );
 
-        let order = if let Some(col) = &page.order_by {
-            let dir = if page.order_desc { "DESC" } else { "ASC" };
-            format!("ORDER BY {} {}", quote_ident(&ENGINE, col), dir)
-        } else {
-            String::new()
+        let base_where = where_clause.unwrap_or("").trim();
+        let (where_sql, order_sql) = match &page.keyset {
+            Some(ks) => {
+                // Keyset (cursor) step: `WHERE [filter] AND col OP bound
+                // ORDER BY col dir` instead of OFFSET. The bound arrives from
+                // the webview so it MUST be quoted (guardrail #1); the column
+                // is quoted as an identifier. OFFSET stays 0 for these steps.
+                let kcol = quote_ident(&ENGINE, &ks.column);
+                let op = if ks.ascending { ">" } else { "<" };
+                let bound = render_keyset_value(&ENGINE, &ks.value);
+                let w = if base_where.is_empty() {
+                    format!("WHERE {kcol} {op} {bound}")
+                } else {
+                    format!("WHERE ({base_where}) AND {kcol} {op} {bound}")
+                };
+                let dir = if ks.ascending { "ASC" } else { "DESC" };
+                (w, format!("ORDER BY {kcol} {dir}"))
+            }
+            None => {
+                let w = if base_where.is_empty() {
+                    String::new()
+                } else {
+                    format!("WHERE {base_where}")
+                };
+                let o = match &page.order_by {
+                    Some(col) => {
+                        let dir = if page.order_desc { "DESC" } else { "ASC" };
+                        format!("ORDER BY {} {}", quote_ident(&ENGINE, col), dir)
+                    }
+                    None => String::new(),
+                };
+                (w, o)
+            }
         };
-
-        let where_str = where_clause
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| format!("WHERE {}", s))
-            .unwrap_or_default();
 
         let sql = format!(
             "SELECT * FROM {} {} {} LIMIT {} OFFSET {}",
-            qualified, where_str, order, page.limit, page.offset
+            qualified, where_sql, order_sql, page.limit, page.offset
         );
 
         let mut result = self.execute_query(&sql).await?;

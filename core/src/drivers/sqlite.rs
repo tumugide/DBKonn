@@ -9,10 +9,14 @@ use sqlx::{
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::{
+    alter::{self, AlterRequest},
     connection::{ConnectionConfig, DbEngine},
     error::CoreError,
-    ident::quote_ident,
-    query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo, TableInfo},
+    ident::{quote_ident, render_keyset_value},
+    query::{
+        ColumnInfo, ForeignKeyInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo,
+        TableInfo,
+    },
     validator::validate_where_clause,
 };
 
@@ -211,7 +215,7 @@ impl DbConnection for SqliteDriver {
     async fn list_tables(&self, _schema: Option<&str>) -> Result<Vec<TableInfo>, CoreError> {
         let rows = sqlx::query(
             "SELECT name, type FROM sqlite_master \
-             WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' \
+             WHERE type IN ('table','view','trigger') AND name NOT LIKE 'sqlite_%' \
              ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -226,6 +230,25 @@ impl DbConnection for SqliteDriver {
                 row_count_estimate: None,
             })
             .collect())
+    }
+
+    async fn get_object_ddl(
+        &self,
+        _schema: Option<&str>,
+        name: &str,
+        object_type: &str,
+    ) -> Result<String, CoreError> {
+        // sqlite_master stores the original CREATE statement verbatim for
+        // tables, views and triggers — `sql` is NULL only for automatically
+        // created index rows.
+        let row = sqlx::query("SELECT sql FROM sqlite_master WHERE type = ? AND name = ?")
+            .bind(object_type)
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| CoreError::Query(format!("No {object_type} named {name} in sqlite_master")))?;
+        row.try_get::<String, _>(0)
+            .map_err(|e| CoreError::Query(format!("No DDL for {name}: {}", e)))
     }
 
     async fn describe_table(
@@ -274,6 +297,73 @@ impl DbConnection for SqliteDriver {
         }
 
         Ok((columns, indexes))
+    }
+
+    async fn list_foreign_keys(
+        &self,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<ForeignKeyInfo>, CoreError> {
+        // `PRAGMA foreign_key_list(t)` returns the FKs where `t` is the CHILD.
+        // To also find tables that reference `t` (incoming), scan every
+        // table's FK list and pick out those whose parent is `t`.
+        let mut out = Vec::new();
+
+        async fn children_of(
+            pool: &SqlitePool,
+            t: &str,
+        ) -> Result<Vec<ForeignKeyInfo>, CoreError> {
+            let sql = format!("PRAGMA foreign_key_list({})", quote_ident(&ENGINE, t));
+            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            // Group by id() into per-constraint column lists.
+            let mut by_id: std::collections::BTreeMap<i64, ForeignKeyInfo> =
+                std::collections::BTreeMap::new();
+            for r in &rows {
+                let id: i64 = r.get(0);
+                let parent: String = r.get(2);
+                let from: String = r.get(3);
+                let to: String = r.get(4);
+                let entry = by_id
+                    .entry(id)
+                    .or_insert_with(|| ForeignKeyInfo {
+                        name: format!("fk_{t}_{id}"),
+                        schema: String::new(),
+                        local_table: t.to_string(),
+                        local_columns: vec![],
+                        foreign_schema: String::new(),
+                        foreign_table: parent,
+                        foreign_columns: vec![],
+                    });
+                entry.local_columns.push(from);
+                entry.foreign_columns.push(to);
+            }
+            Ok(by_id.into_values().collect())
+        }
+
+        // Outgoing: this table is the child.
+        for fk in children_of(&self.pool, table).await? {
+            out.push(fk);
+        }
+
+        // Incoming: scan all tables whose FK parent is this table.
+        let tables = sqlx::query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        for trow in &tables {
+            let other: String = trow.get(0);
+            if other == table {
+                continue;
+            }
+            for fk in children_of(&self.pool, &other).await? {
+                if fk.foreign_table == table {
+                    out.push(fk);
+                }
+            }
+        }
+
+        Ok(out)
     }
 
     async fn execute_query(&self, sql: &str) -> Result<QueryResult, CoreError> {
@@ -338,6 +428,18 @@ impl DbConnection for SqliteDriver {
         Ok(result)
     }
 
+    async fn alter_table(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        request: &AlterRequest,
+    ) -> Result<String, CoreError> {
+        let sql = alter::build_alter_sql(ENGINE, schema, table, request)
+            .map_err(CoreError::Query)?;
+        self.execute_query(&sql).await?;
+        Ok(sql)
+    }
+
     async fn fetch_table_rows(
         &self,
         _schema: Option<&str>,
@@ -347,23 +449,45 @@ impl DbConnection for SqliteDriver {
     ) -> Result<QueryResult, CoreError> {
         validate_where_clause(where_clause.unwrap_or(""), &ENGINE)?;
 
-        let order = if let Some(col) = &page.order_by {
-            let dir = if page.order_desc { "DESC" } else { "ASC" };
-            format!("ORDER BY {} {}", quote_ident(&ENGINE, col), dir)
-        } else {
-            String::new()
+        let base_where = where_clause.unwrap_or("").trim();
+        let (where_sql, order_sql) = match &page.keyset {
+            Some(ks) => {
+                // Keyset (cursor) step — see pg.rs for the shared rationale.
+                // Bound MUST be rendered via render_keyset_value/quote_literal
+                // (guardrail #1); the column is quoted as an identifier.
+                let kcol = quote_ident(&ENGINE, &ks.column);
+                let op = if ks.ascending { ">" } else { "<" };
+                let bound = render_keyset_value(&ENGINE, &ks.value);
+                let w = if base_where.is_empty() {
+                    format!("WHERE {kcol} {op} {bound}")
+                } else {
+                    format!("WHERE ({base_where}) AND {kcol} {op} {bound}")
+                };
+                let dir = if ks.ascending { "ASC" } else { "DESC" };
+                (w, format!("ORDER BY {kcol} {dir}"))
+            }
+            None => {
+                let w = if base_where.is_empty() {
+                    String::new()
+                } else {
+                    format!("WHERE {base_where}")
+                };
+                let o = match &page.order_by {
+                    Some(col) => {
+                        let dir = if page.order_desc { "DESC" } else { "ASC" };
+                        format!("ORDER BY {} {}", quote_ident(&ENGINE, col), dir)
+                    }
+                    None => String::new(),
+                };
+                (w, o)
+            }
         };
-
-        let where_str = where_clause
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| format!("WHERE {}", s))
-            .unwrap_or_default();
 
         let sql = format!(
             "SELECT * FROM {} {} {} LIMIT {} OFFSET {}",
             quote_ident(&ENGINE, table),
-            where_str,
-            order,
+            where_sql,
+            order_sql,
             page.limit,
             page.offset
         );

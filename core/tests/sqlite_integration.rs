@@ -4,7 +4,7 @@
 use dbkonn_core::{
     connection::{ConnectionConfig, DbEngine, SslMode},
     drivers::connect,
-    query::{PageRequest, RowValue},
+    query::{Keyset, PageRequest, RowValue},
     validator::validate_sql,
 };
 
@@ -205,6 +205,7 @@ async fn test_sqlite_pagination() {
                 offset: 0,
                 order_by: Some("id".to_string()),
                 order_desc: false,
+                keyset: None,
             },
             None,
         )
@@ -223,6 +224,7 @@ async fn test_sqlite_pagination() {
                 offset: 3,
                 order_by: Some("id".to_string()),
                 order_desc: false,
+                keyset: None,
             },
             None,
         )
@@ -278,6 +280,7 @@ async fn test_sqlite_descending_sort() {
                 offset: 0,
                 order_by: Some("n".to_string()),
                 order_desc: true,
+                keyset: None,
             },
             None,
         )
@@ -337,4 +340,158 @@ async fn test_sql_validator_postgres_dialect() {
     assert!(
         validate_sql("SELECT * FROM t LIMIT 10 OFFSET 5", &DbEngine::Postgres).is_ok()
     );
+}
+
+#[tokio::test]
+async fn test_sqlite_foreign_keys_bidirectional() {
+    let driver = connect(&sqlite_config()).await.unwrap();
+
+    driver
+        .execute_query(
+            "CREATE TABLE kf_parent (
+                id   INTEGER PRIMARY KEY,
+                code TEXT UNIQUE,
+                name TEXT
+             )",
+        )
+        .await
+        .unwrap();
+    driver
+        .execute_query(
+            "CREATE TABLE kf_child (
+                id          INTEGER PRIMARY KEY,
+                parent_id   INTEGER NOT NULL REFERENCES kf_parent(id),
+                parent_code TEXT REFERENCES kf_parent(code)
+             )",
+        )
+        .await
+        .unwrap();
+
+    // Outgoing FKs on the child.
+    let child_fks = driver
+        .list_foreign_keys(None, "kf_child")
+        .await
+        .unwrap();
+    assert_eq!(child_fks.len(), 2, "2 outgoing FKs");
+    for fk in &child_fks {
+        assert_eq!(fk.local_table, "kf_child");
+        assert_eq!(fk.foreign_table, "kf_parent");
+    }
+    let by_local: std::collections::HashMap<&str, &dbkonn_core::query::ForeignKeyInfo> =
+        child_fks
+            .iter()
+            .map(|f| (f.local_columns[0].as_str(), f))
+            .collect();
+    assert_eq!(by_local["parent_id"].foreign_columns[0], "id");
+    assert_eq!(by_local["parent_code"].foreign_columns[0], "code");
+
+    // Incoming FKs on the parent (found by scanning other tables).
+    let parent_fks = driver
+        .list_foreign_keys(None, "kf_parent")
+        .await
+        .unwrap();
+    assert_eq!(parent_fks.len(), 2, "2 incoming FKs");
+    for fk in &parent_fks {
+        assert_eq!(fk.local_table, "kf_child");
+        assert_eq!(fk.foreign_table, "kf_parent");
+    }
+
+    let _ = driver.execute_query("DROP TABLE kf_child").await;
+    let _ = driver.execute_query("DROP TABLE kf_parent").await;
+}
+
+#[tokio::test]
+async fn test_sqlite_keyset_pagination() {
+    let driver = connect(&sqlite_config()).await.unwrap();
+
+    driver
+        .execute_query("CREATE TABLE ks_tbl (id INTEGER PRIMARY KEY)")
+        .await
+        .unwrap();
+    driver
+        .execute_query(
+            "INSERT INTO ks_tbl (id)
+             WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM cnt WHERE x < 25)
+             SELECT x FROM cnt",
+        )
+        .await
+        .unwrap();
+
+    let p1 = driver
+        .fetch_table_rows(
+            None,
+            "ks_tbl",
+            &PageRequest {
+                limit: 10,
+                offset: 0,
+                order_by: Some("id".to_string()),
+                order_desc: false,
+                keyset: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(p1.rows[0][0], RowValue::Integer(1)));
+
+    let p2 = driver
+        .fetch_table_rows(
+            None,
+            "ks_tbl",
+            &PageRequest {
+                limit: 10,
+                offset: 0,
+                order_by: Some("id".to_string()),
+                order_desc: false,
+                keyset: Some(Keyset {
+                    column: "id".to_string(),
+                    value: RowValue::Integer(10),
+                    ascending: true,
+                }),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(p2.rows[0][0], RowValue::Integer(11)), "keyset 2");
+
+    // Descending.
+    let d1 = driver
+        .fetch_table_rows(
+            None,
+            "ks_tbl",
+            &PageRequest {
+                limit: 10,
+                offset: 0,
+                order_by: Some("id".to_string()),
+                order_desc: true,
+                keyset: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(d1.rows[0][0], RowValue::Integer(25)));
+    let d2 = driver
+        .fetch_table_rows(
+            None,
+            "ks_tbl",
+            &PageRequest {
+                limit: 10,
+                offset: 0,
+                order_by: Some("id".to_string()),
+                order_desc: true,
+                keyset: Some(Keyset {
+                    column: "id".to_string(),
+                    value: RowValue::Integer(16),
+                    ascending: false,
+                }),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(d2.rows[0][0], RowValue::Integer(15)));
+
+    let _ = driver.execute_query("DROP TABLE ks_tbl").await;
 }
