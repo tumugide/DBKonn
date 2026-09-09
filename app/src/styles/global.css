@@ -1011,6 +1011,17 @@ table.data-grid td.bool-false {
 table.data-grid td.json-cell {
     color: var(--accent-yellow);
 }
+table.data-grid td.fk-cell {
+    color: var(--accent-blue);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+table.data-grid tr.selected td.fk-cell,
+table.data-grid td.fk-cell:hover {
+    color: var(--accent-blue);
+    filter: brightness(1.2);
+}
 
 /* ── Pagination ──────────────────────────────────────────────────────────── */
 .pagination {

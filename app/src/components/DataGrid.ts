@@ -1,5 +1,5 @@
-import type { ColumnInfo, QueryResult, RowValue } from "../lib/ipc";
-import { showContextMenu } from "./ContextMenu";
+import type { ColumnInfo, ForeignKeyInfo, QueryResult, RowValue } from "../lib/ipc";
+import { showContextMenu, type ContextMenuItem } from "./ContextMenu";
 
 // Copy text to the clipboard. `navigator.clipboard` isn't always available in
 // the webview, so fall back to a hidden textarea + execCommand.
@@ -48,6 +48,25 @@ export interface GridOptions {
   sortCol?: string;
   sortDesc?: boolean;
   selectedRowIndex?: number;
+  /** The table being shown — used to split the FK list into outgoing
+   *  (local_table === name) and incoming (foreign_table === name). */
+  tableName?: string;
+  /** Foreign keys touching this table (both directions). Fed via
+   *  [setForeignKeys]; the grid renders clickable affordances on outgoing
+   *  FK cells and a "show referencing rows" action for incoming ones. */
+  foreignKeys?: ForeignKeyInfo[];
+  onOpenReferencedRow?: (
+    fk: ForeignKeyInfo,
+    row: RowValue[],
+    columns: ColumnInfo[],
+    rowIndex: number,
+  ) => void;
+  onShowReferencingRows?: (
+    fk: ForeignKeyInfo,
+    row: RowValue[],
+    columns: ColumnInfo[],
+    rowIndex: number,
+  ) => void;
 }
 
 export class DataGrid {
@@ -65,6 +84,10 @@ export class DataGrid {
   private dragAnchor: number | null = null;
   private dragMoved = false;
   private dragBase: Set<number> = new Set();
+  // local FK column → constraints where that column is the child. Reset by
+  // setForeignKeys() and consulted per-cell in buildRow.
+  private fkOutgoing: Map<string, ForeignKeyInfo[]> = new Map();
+  private fkIncoming: ForeignKeyInfo[] = [];
 
   constructor(opts: GridOptions) {
     this.opts = opts;
@@ -149,6 +172,28 @@ export class DataGrid {
     this.opts.sortCol = col;
     this.opts.sortDesc = desc;
     this.renderHeaders();
+  }
+
+  // New FK metadata (outgoing + incoming) for the currently displayed table.
+  // Outgoing local columns become clickable affordances; incoming constraints
+  // are offered as "show referencing rows" actions in the context menu.
+  setForeignKeys(fks: ForeignKeyInfo[]) {
+    const tableName = this.opts.tableName;
+    this.fkOutgoing = new Map();
+    this.fkIncoming = [];
+    for (const fk of fks) {
+      if (tableName && fk.local_table === tableName) {
+        for (const col of fk.local_columns) {
+          const list = this.fkOutgoing.get(col) ?? [];
+          list.push(fk);
+          this.fkOutgoing.set(col, list);
+        }
+      }
+      if (fk.foreign_table === tableName) {
+        this.fkIncoming.push(fk);
+      }
+    }
+    this.forceRerender();
   }
 
   setSelectedRow(rowIndex?: number) {
@@ -372,13 +417,14 @@ export class DataGrid {
     if (this.multiSelect.has(idx)) {
       tr.classList.add("multi-selected");
     }
+    const columns = this.result?.columns ?? [];
     tr.addEventListener("mousedown", (e) => this.onRowMouseDown(e as MouseEvent, idx));
     tr.addEventListener("contextmenu", (e) => {
       const ev = e as MouseEvent;
       const td = (ev.target as HTMLElement | null)?.closest("td");
       const cellText = td?.textContent ?? "";
       ev.preventDefault();
-      showContextMenu(ev.clientX, ev.clientY, [
+      const items: ContextMenuItem[] = [
         { label: "Copy cell", onSelect: () => copyText(cellText) },
         {
           label: "Copy row (TSV)",
@@ -387,14 +433,32 @@ export class DataGrid {
         {
           label: "Copy row (JSON)",
           onSelect: () => {
-            const cols = this.result?.columns ?? [];
+            const cols = columns;
             const obj = Object.fromEntries(
               cols.map((c, i) => [c.name, row[i] ?? null]),
             );
             copyText(JSON.stringify(obj, null, 2));
           },
         },
-      ]);
+      ];
+      // Incoming FKs: offer to jump to the rows in the child table that
+      // reference this row.
+      if (this.fkIncoming.length > 0) {
+        items.push({
+          label: "Show referencing rows…",
+          separatorBefore: true,
+          disabled: true,
+          onSelect: () => {},
+        });
+        for (const fk of this.fkIncoming) {
+          items.push({
+            label: `  ${fk.local_table}`,
+            onSelect: () =>
+              this.opts.onShowReferencingRows?.(fk, row, columns, idx),
+          });
+        }
+      }
+      showContextMenu(ev.clientX, ev.clientY, items);
     });
     tr.addEventListener("click", (e) => {
       const evt = e as MouseEvent;
@@ -428,11 +492,36 @@ export class DataGrid {
       this.forceRerender();
       this.opts.onRowClick?.(row, idx);
     });
-    row.forEach((val) => {
+    row.forEach((val, i) => {
       const td = document.createElement("td");
       const { text, cls } = formatCell(val);
       td.textContent = text;
       if (cls) td.className = cls;
+
+      // Outgoing FK: this cell references a row in another table — make it a
+      // visibly clickable pointer that opens the referenced parent row.
+      const colName = columns[i]?.name;
+      const fks = colName ? this.fkOutgoing.get(colName) : undefined;
+      if (fks && fks.length > 0 && val !== null && val !== undefined) {
+        td.classList.add("fk-cell");
+        td.title = "Open referenced row";
+        td.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.opts.onOpenReferencedRow?.(fks[0]!, row, columns, idx);
+        });
+        td.addEventListener("contextmenu", (e) => {
+          const ev = e as MouseEvent;
+          ev.preventDefault();
+          ev.stopPropagation();
+          showContextMenu(ev.clientX, ev.clientY, [
+            {
+              label: `Open referenced row → ${fks[0]!.foreign_table}`,
+              onSelect: () => this.opts.onOpenReferencedRow?.(fks[0]!, row, columns, idx),
+            },
+            { label: "Copy cell", onSelect: () => copyText(text) },
+          ]);
+        });
+      }
       tr.appendChild(td);
     });
     return tr;

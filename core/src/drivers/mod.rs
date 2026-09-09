@@ -7,7 +7,9 @@ use crate::{
     alter::AlterRequest,
     connection::ConnectionConfig,
     error::CoreError,
-    query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, SchemaInfo, TableInfo},
+    query::{
+        ColumnInfo, ForeignKeyInfo, IndexInfo, PageRequest, QueryResult, SchemaInfo, TableInfo,
+    },
 };
 use async_trait::async_trait;
 
@@ -35,6 +37,16 @@ pub trait DbConnection: Send + Sync {
         schema: Option<&str>,
         table: &str,
     ) -> Result<(Vec<ColumnInfo>, Vec<IndexInfo>), CoreError>;
+
+    /// List foreign-key constraints that reference or are referenced by
+    /// `schema.table` (both directions; see `ForeignKeyInfo`).
+    async fn list_foreign_keys(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<ForeignKeyInfo>, CoreError> {
+        Ok(vec![])
+    }
 
     /// Execute arbitrary SQL and return results.
     async fn execute_query(&self, sql: &str) -> Result<QueryResult, CoreError>;

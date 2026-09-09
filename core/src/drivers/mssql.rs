@@ -13,8 +13,11 @@ use crate::{
     alter::{self, AlterRequest},
     connection::{ConnectionConfig, DbEngine, SslMode},
     error::CoreError,
-    ident::quote_ident,
-    query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo, TableInfo},
+    ident::{quote_ident, render_keyset_value},
+    query::{
+        ColumnInfo, ForeignKeyInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo,
+        TableInfo,
+    },
     validator::validate_where_clause,
 };
 
@@ -416,7 +419,7 @@ fn tiberius_cell_to_row_value(row: &Row, i: usize, col_type: ColumnType) -> RowV
         | ColumnType::NText => decode::<&str, _>(row, i, |s| RowValue::Text(s.to_string())),
 
         ColumnType::BigVarBin | ColumnType::BigBinary | ColumnType::Image => {
-            decode::<&[u8], _>(row, i, |b| binary_preview(b))
+            decode::<&[u8], _>(row, i, binary_preview)
         }
 
         // Xml, Udt, SSVariant: no direct FromSql target wired up — fall
@@ -471,7 +474,7 @@ fn tiberius_rows_to_query_result(
 ) -> QueryResult {
     let columns: Vec<ColumnInfo> = col_names
         .into_iter()
-        .zip(col_types.into_iter())
+        .zip(col_types)
         .map(|(name, data_type)| ColumnInfo {
             name,
             data_type,
@@ -745,6 +748,91 @@ impl DbConnection for MssqlDriver {
         Ok((columns, index_map.into_values().collect()))
     }
 
+    async fn list_foreign_keys(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<ForeignKeyInfo>, CoreError> {
+        let schema = schema.unwrap_or("dbo");
+        let mut client = self.pool.acquire().await?;
+
+        // Headers: every FK where `schema.table` is either the child table
+        // (parent_object_id) or the referenced table (referenced_object_id).
+        let header_stream = client
+            .query(
+                "SELECT fk.name, fk.object_id,
+                        sp.name AS local_schema, tp.name AS local_table,
+                        sr.name AS foreign_schema, tr.name AS foreign_table
+                 FROM sys.foreign_keys fk
+                 JOIN sys.tables tp ON tp.object_id = fk.parent_object_id
+                 JOIN sys.schemas sp ON sp.schema_id = tp.schema_id
+                 JOIN sys.tables tr ON tr.object_id = fk.referenced_object_id
+                 JOIN sys.schemas sr ON sr.schema_id = tr.schema_id
+                 WHERE (sp.name = @P1 AND tp.name = @P2)
+                    OR (sr.name = @P1 AND tr.name = @P2)
+                 ORDER BY fk.name",
+                &[&schema, &table],
+            )
+            .await
+            .map_err(|e| CoreError::Query(e.to_string()))?;
+
+        let header_rows = header_stream
+            .into_first_result()
+            .await
+            .map_err(|e| CoreError::Query(e.to_string()))?;
+
+        let mut out = Vec::new();
+        for h in &header_rows {
+            let name: String = h.get::<&str, _>(0).unwrap_or_default().to_string();
+            let oid: i32 = h.get(1).unwrap_or_default();
+            let local_schema: String = h.get::<&str, _>(2).unwrap_or_default().to_string();
+            let local_table: String = h.get::<&str, _>(3).unwrap_or_default().to_string();
+            let foreign_schema: String = h.get::<&str, _>(4).unwrap_or_default().to_string();
+            let foreign_table: String = h.get::<&str, _>(5).unwrap_or_default().to_string();
+
+            let col_stream = client
+                .query(
+                    "SELECT pc.name AS local_col, rc.name AS foreign_col
+                     FROM sys.foreign_key_columns fkc
+                     JOIN sys.columns pc
+                       ON pc.object_id = fkc.parent_object_id
+                      AND pc.column_id = fkc.parent_column_id
+                     JOIN sys.columns rc
+                       ON rc.object_id = fkc.referenced_object_id
+                      AND rc.column_id = fkc.referenced_column_id
+                     WHERE fkc.constraint_object_id = @P1
+                     ORDER BY fkc.constraint_column_id",
+                    &[&oid],
+                )
+                .await
+                .map_err(|e| CoreError::Query(e.to_string()))?;
+
+            let col_rows = col_stream
+                .into_first_result()
+                .await
+                .map_err(|e| CoreError::Query(e.to_string()))?;
+
+            let mut local_columns = Vec::new();
+            let mut foreign_columns = Vec::new();
+            for c in &col_rows {
+                local_columns.push(c.get::<&str, _>(0).unwrap_or_default().to_string());
+                foreign_columns.push(c.get::<&str, _>(1).unwrap_or_default().to_string());
+            }
+
+            out.push(ForeignKeyInfo {
+                name,
+                schema: local_schema,
+                local_table,
+                local_columns,
+                foreign_schema,
+                foreign_table,
+                foreign_columns,
+            });
+        }
+
+        Ok(out)
+    }
+
     async fn execute_query(&self, sql: &str) -> Result<QueryResult, CoreError> {
         let start = Instant::now();
 
@@ -859,22 +947,46 @@ impl DbConnection for MssqlDriver {
             quote_ident(&ENGINE, table)
         );
 
-        let order = if let Some(col) = &page.order_by {
-            let dir = if page.order_desc { "DESC" } else { "ASC" };
-            format!("ORDER BY {} {}", quote_ident(&ENGINE, col), dir)
-        } else {
-            // MSSQL requires ORDER BY for OFFSET/FETCH
-            "ORDER BY (SELECT NULL)".to_string()
+        let base_where = where_clause.unwrap_or("").trim();
+        let (where_sql, order_sql) = match &page.keyset {
+            Some(ks) => {
+                // Keyset (cursor) step — see pg.rs for the shared rationale.
+                // Bound MUST be rendered via render_keyset_value/quote_literal
+                // (guardrail #1); the column is quoted as an identifier.
+                let kcol = quote_ident(&ENGINE, &ks.column);
+                let op = if ks.ascending { ">" } else { "<" };
+                let bound = render_keyset_value(&ENGINE, &ks.value);
+                let w = if base_where.is_empty() {
+                    format!("WHERE {kcol} {op} {bound}")
+                } else {
+                    format!("WHERE ({base_where}) AND {kcol} {op} {bound}")
+                };
+                let dir = if ks.ascending { "ASC" } else { "DESC" };
+                (w, format!("ORDER BY {kcol} {dir}"))
+            }
+            None => {
+                let w = if base_where.is_empty() {
+                    String::new()
+                } else {
+                    format!("WHERE {base_where}")
+                };
+                let o = match &page.order_by {
+                    Some(col) => {
+                        let dir = if page.order_desc { "DESC" } else { "ASC" };
+                        format!("ORDER BY {} {}", quote_ident(&ENGINE, col), dir)
+                    }
+                    None => {
+                        // MSSQL requires ORDER BY for OFFSET/FETCH
+                        "ORDER BY (SELECT NULL)".to_string()
+                    }
+                };
+                (w, o)
+            }
         };
-
-        let where_str = where_clause
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| format!("WHERE {}", s))
-            .unwrap_or_default();
 
         let sql = format!(
             "SELECT * FROM {} {} {} OFFSET {} ROWS FETCH NEXT {} ROWS ONLY",
-            qualified, where_str, order, page.offset, page.limit
+            qualified, where_sql, order_sql, page.offset, page.limit
         );
 
         let mut result = self.execute_query(&sql).await?;

@@ -50,6 +50,18 @@ export interface IndexInfo {
   is_primary: boolean;
 }
 
+// Mirrors `ForeignKeyInfo` in core/src/query.rs. One normalized FK:
+// local_table(local_columns) → foreign_table(foreign_columns).
+export interface ForeignKeyInfo {
+  name: string;
+  schema: string;
+  local_table: string;
+  local_columns: string[];
+  foreign_schema: string;
+  foreign_table: string;
+  foreign_columns: string[];
+}
+
 export interface TableInfo {
   schema: string;
   name: string;
@@ -72,11 +84,20 @@ export interface QueryResult {
   affected_rows?: number;
 }
 
+// Mirrors `Keyset` in core/src/query.rs — the stable sort column + the value
+// of that column on the last row of the previous page, for cursor paging.
+export interface Keyset {
+  column: string;
+  value: RowValue;
+  ascending: boolean;
+}
+
 export interface PageRequest {
   limit: number;
   offset: number;
   order_by?: string;
   order_desc: boolean;
+  keyset?: Keyset;
 }
 
 export interface ParseError {
@@ -151,6 +172,7 @@ export const ipc = {
   listSchemas:         (connId: string)                                         => invoke<SchemaInfo[]>("list_schemas", { connId }),
   listTables:          (connId: string, schema?: string)                        => invoke<TableInfo[]>("list_tables", { connId, schema }),
   describeTable:       (connId: string, schema: string|undefined, table: string) => withTimeout(invoke<[ColumnInfo[], IndexInfo[]]>("describe_table", { connId, schema, table }), `describe ${table}`),
+  listForeignKeys:     (connId: string, schema: string|undefined, table: string) => withTimeout(invoke<ForeignKeyInfo[]>("list_foreign_keys", { connId, schema, table }), `fk ${table}`),
   getObjectDdl:        (connId: string, schema: string|undefined, name: string, objectType: string) =>
                          withTimeout(invoke<string>("get_object_ddl", { connId, schema, name, objectType }), `ddl ${name}`),
   alterTable:          (connId: string, schema: string|undefined, table: string, request: AlterRequest) =>

@@ -5,6 +5,7 @@ import type {
   SchemaInfo,
   ColumnInfo,
   RowValue,
+  Keyset,
 } from "./ipc";
 import type { FilterRule } from "./filter";
 
@@ -88,6 +89,15 @@ export interface TableState {
   loading: boolean;
   error?: string;
   columns: ColumnInfo[];
+  /** Keyset cursor for the NEXT page — {column, value} of the last row shown,
+   *  usable only one forward page at a time. Null when keyset is unavailable
+   *  (no single-column PK / non-PK sort) or the last fetch wasn't a full page.
+   *  Arbitrary page jumps and backward steps fall back to OFFSET and re-seed
+   *  this cursor from their first fetch. */
+  keyset: Keyset | null;
+  /** Page number of the last successfully painted result — lets the loader
+   *  detect a +1 forward step (keyset-eligible) vs any other jump (OFFSET). */
+  renderedPage: number | null;
 }
 
 export interface SelectedRecord {
@@ -172,6 +182,8 @@ export const appState = {
     whereClause: "",
     loading: false,
     columns: [],
+    keyset: null,
+    renderedPage: null,
   }),
   tableMetadata: new Signal<ColumnInfo[]>([]),
   selectedRecord: new Signal<SelectedRecord | null>(null),

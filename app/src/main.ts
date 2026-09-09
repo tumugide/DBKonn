@@ -1,6 +1,6 @@
 import "./styles/global.css";
 import { listen } from "@tauri-apps/api/event";
-import { ipc, type ConnectionConfig, type ColumnInfo, type IndexInfo } from "./lib/ipc";
+import { ipc, type ConnectionConfig, type ColumnInfo, type IndexInfo, type PageRequest, type ForeignKeyInfo } from "./lib/ipc";
 import {
   appState,
   type ThemeType,
@@ -25,7 +25,8 @@ import { wireModalDismissal } from "./lib/modal";
 import { createExportButton } from "./components/ExportMenu";
 import { showContextMenu } from "./components/ContextMenu";
 import { cloneRowValue, buildDeleteSql } from "./lib/rowEdit";
-import type { RowValue } from "./lib/ipc";
+import { compileWhereClause, newRule, type FilterRule } from "./lib/filter";
+import type { RowValue, QueryResult, Keyset } from "./lib/ipc";
 import { saveExport, formatMeta, MAX_EXPORT_ROWS, type ExportFormat } from "./lib/export";
 import {
   saveSession,
@@ -945,6 +946,9 @@ let sqlEditor: SqlEditor | null = null;
 let dataGrid: DataGrid | null = null;
 let filterBar: FilterBar | null = null;
 let recordPanel: RecordPanel | null = null;
+// FK metadata for the active table (both directions) — fed to the grid so FK
+// cells offer "open referenced row" / "show referencing rows".
+let lastForeignKeys: ForeignKeyInfo[] = [];
 
 // Monotonic id for the active table tab's in-flight data fetch (A14), and a
 // handle to that tab's `loadTableData` so pagination can reload rows in place
@@ -1304,6 +1308,8 @@ function renderTableTabContent(_tab: TableTab) {
     sortCol: ts.orderBy,
     sortDesc: ts.orderDesc,
     selectedRowIndex: selected?.rowIndex,
+    tableName: ac.selectedTable,
+    foreignKeys: lastForeignKeys,
     onHeaderClick: async (col) => {
       if (!confirmDiscardIfDirty()) return;
       clearRecordSelection();
@@ -1323,6 +1329,8 @@ function renderTableTabContent(_tab: TableTab) {
         clearRecordSelection();
       }
     },
+    onOpenReferencedRow: openReferencedRow,
+    onShowReferencingRows: showReferencingRows,
   });
 
   // Record panel
@@ -1433,11 +1441,70 @@ function renderTableTabContent(_tab: TableTab) {
       lastIndexes = indexes;
       appState.tableMetadata.set(columns);
       recordPanel?.setColumns(columns);
+      // Foreign keys are a side channel here — they only dress up the grid
+      // with FK affordances. Fetch in parallel and swallow failures: the
+      // table view still works (rows just aren't clickable as FKs).
+      ipc
+        .listForeignKeys(ac2.connId, schemaForEngine(), ac2.selectedTable)
+        .then((fks) => {
+          lastForeignKeys = fks;
+          dataGrid?.setForeignKeys(fks);
+        })
+        .catch(() => {});
       return { columns, indexes };
     } catch (e) {
       console.warn("Failed to load table metadata:", e);
       return null;
     }
+  }
+
+  // ── FK navigation ─────────────────────────────────────────────────────
+  // Jump from an FK cell to the referenced row in the parent table, filtered
+  // on the parent key columns (or the child side for "show referencing rows").
+  async function openReferencedRow(
+    fk: ForeignKeyInfo,
+    row: RowValue[],
+    columns: ColumnInfo[],
+    _rowIndex: number,
+  ) {
+    const ac3 = appState.activeConn.value;
+    if (!ac3) return;
+    const { pairs, missing } = fkRowPairs(fk.local_columns, fk.foreign_columns, row, columns);
+    if (pairs.length === 0 || missing) {
+      appState.status.set(
+        `FK "${fk.name}" has a NULL component — can't pinpoint the referenced row.`,
+      );
+      return;
+    }
+    const { rules, columnTypes } = await fkPairRules(
+      pairs,
+      fk.foreign_schema || undefined,
+      fk.foreign_table,
+    );
+    openFilteredTableTab(fk.foreign_table, fk.foreign_schema || undefined, rules, columnTypes);
+  }
+
+  async function showReferencingRows(
+    fk: ForeignKeyInfo,
+    row: RowValue[],
+    columns: ColumnInfo[],
+    _rowIndex: number,
+  ) {
+    const ac3 = appState.activeConn.value;
+    if (!ac3) return;
+    const { pairs, missing } = fkRowPairs(fk.foreign_columns, fk.local_columns, row, columns);
+    if (pairs.length === 0 || missing) {
+      appState.status.set(
+        "Row has NULL FK components — can't find rows referencing it.",
+      );
+      return;
+    }
+    const { rules, columnTypes } = await fkPairRules(
+      pairs,
+      fk.schema || undefined,
+      fk.local_table,
+    );
+    openFilteredTableTab(fk.local_table, fk.schema || undefined, rules, columnTypes);
   }
 
   // ── Load table data ─────────────────────────────────────────────────────
@@ -1468,27 +1535,73 @@ function renderTableTabContent(_tab: TableTab) {
     dataGrid?.setLoading(true);
     appState.tableState.set({ ...s, loading: true });
 
+    // ── Keyset (cursor) selection ────────────────────────────────────────
+    // A single-column PK is the only guaranteed stable sort key: unique, no
+    // NULLs. When the user's sort IS that PK column (or there's no sort at
+    // all) we can page forward with `WHERE col OP bound` instead of OFFSET —
+    // fast and immune to insert/delete drift between pages. Anything else
+    // (multi-column PK, non-PK sort) falls back to OFFSET paging.
+    const metaCols = appState.tableMetadata.value;
+    const keySpec = computeStableKey(metaCols, s.orderBy, s.orderDesc);
+    const cursorMatchesKey =
+      !!s.keyset &&
+      !!keySpec &&
+      s.keyset.column === keySpec.column &&
+      s.keyset.ascending === keySpec.ascending;
+    // Keyset only applies to an exactly-one-page forward step from the page
+    // we just painted; any jump (back, arbitrary, post-mutation reload) uses
+    // OFFSET and re-seeds the cursor below.
+    const useKeyset =
+      !!cursorMatchesKey && s.renderedPage !== null && s.page === s.renderedPage + 1;
+    const effectiveOrderBy = keySpec ? keySpec.column : s.orderBy;
+    const effectiveOrderDesc = keySpec ? !keySpec.ascending : s.orderDesc;
+
+    const pageReq: PageRequest = {
+      limit: s.pageSize,
+      offset: useKeyset ? 0 : s.page * s.pageSize,
+      order_by: effectiveOrderBy,
+      order_desc: effectiveOrderDesc,
+    };
+    if (useKeyset) {
+      pageReq.keyset = {
+        column: s.keyset!.column,
+        value: s.keyset!.value,
+        ascending: s.keyset!.ascending,
+      };
+    }
+
     try {
-      const [rows, total] = await Promise.all([
-        ipc.fetchTableRows(
-          ac2.connId,
-          schemaForEngine(),
-          ac2.selectedTable,
-          {
-            limit: s.pageSize,
-            offset: s.page * s.pageSize,
-            order_by: s.orderBy,
-            order_desc: s.orderDesc,
-          },
-          s.whereClause || undefined,
-        ),
-        ipc.countRows(
-          ac2.connId,
-          schemaForEngine(),
-          ac2.selectedTable,
-          s.whereClause || undefined,
-        ),
-      ]);
+      // Keyset steps reuse the cached count — the sort/filter/page-size that
+      // figure is indexed by are unchanged by a +1 page step, so running
+      // COUNT(*) on every "Next" would be pure waste. Every OFFSET fetch
+      // (first load, jumps, filter/sort changes) recomputes it.
+      const refreshCount = !useKeyset;
+      const [rows, total] = refreshCount
+        ? await Promise.all([
+            ipc.fetchTableRows(
+              ac2.connId,
+              schemaForEngine(),
+              ac2.selectedTable,
+              pageReq,
+              s.whereClause || undefined,
+            ),
+            ipc.countRows(
+              ac2.connId,
+              schemaForEngine(),
+              ac2.selectedTable,
+              s.whereClause || undefined,
+            ),
+          ])
+        : ([
+            await ipc.fetchTableRows(
+              ac2.connId,
+              schemaForEngine(),
+              ac2.selectedTable,
+              pageReq,
+              s.whereClause || undefined,
+            ),
+            s.totalRows,
+          ] as const);
 
       if (!isCurrent()) return;
       dataGrid?.setLoading(false);
@@ -1507,16 +1620,24 @@ function renderTableTabContent(_tab: TableTab) {
         return loadTableData();
       }
 
+      // Re-seed the cursor for the NEXT forward step. A short page (fewer
+      // rows than requested) means we're at the end — clear it so a later
+      // jump can't resurrect a bound past the last row.
+      const nextKeyset = keySpec
+        ? computeNextKeyset(s.pageSize, rows, keySpec.column, keySpec.ascending)
+        : null;
+
       appState.tableState.set({
         ...appState.tableState.value,
         totalRows: total,
+        keyset: nextKeyset,
+        renderedPage: s.page,
         loading: false,
       });
       dataGrid?.setData(rows);
       const sel = appState.selectedRecord.value;
       if (sel) dataGrid?.setSelectedRow(sel.rowIndex);
 
-      const metaCols = appState.tableMetadata.value;
       const filterCols = rows.columns.length > 0 ? rows.columns : metaCols;
       if (filterCols.length > 0) {
         filterBar?.setColumns(filterCols);
@@ -2179,6 +2300,46 @@ function generateTabId(): string {
   return `tab_${crypto.randomUUID()}`;
 }
 
+// ── Keyset pagination helpers ────────────────────────────────────────────────
+// Pick the stable sort key for cursor paging. A single-column PK is the only
+// guaranteed-unique, non-null column set, so it's the only safe keyset column.
+// When the user sorts by that PK column the keyset follows their direction;
+// with no explicit sort it defaults to PK ASC (which also gives OFFSET-fallback
+// pages a deterministic order identical to the keyset pages).
+function computeStableKey(
+  cols: ColumnInfo[],
+  orderBy: string | undefined,
+  orderDesc: boolean,
+): { column: string; ascending: boolean } | null {
+  const pkCols = cols.filter((c) => c.is_primary_key).map((c) => c.name);
+  if (pkCols.length !== 1) return null;
+  const pk = pkCols[0]!;
+  if (orderBy) {
+    return orderBy === pk ? { column: pk, ascending: !orderDesc } : null;
+  }
+  return { column: pk, ascending: true };
+}
+
+// Build the cursor for the NEXT forward page from the result we just painted:
+// the value of the keyset column on its last row. Null when the page came back
+// short (we're at the end) or the keyset column is missing/NULL (a NULL bound
+// would silently page nothing).
+function computeNextKeyset(
+  limit: number,
+  rows: QueryResult | null,
+  keyColumn: string,
+  ascending: boolean,
+): Keyset | null {
+  if (!rows || rows.error || rows.rows.length === 0) return null;
+  if (rows.row_count < limit) return null;
+  const colIdx = rows.columns.findIndex((c) => c.name === keyColumn);
+  if (colIdx === -1) return null;
+  const last = rows.rows[rows.rows.length - 1]!;
+  const value = last[colIdx];
+  if (value === null || value === undefined) return null;
+  return { column: keyColumn, value: cloneRowValue(value), ascending };
+}
+
 function freshTableState(): TableState {
   return {
     totalRows: 0,
@@ -2188,6 +2349,8 @@ function freshTableState(): TableState {
     whereClause: "",
     loading: false,
     columns: [],
+    keyset: null,
+    renderedPage: null,
   };
 }
 
@@ -2332,6 +2495,100 @@ function renderTabStrip() {
   });
 
   appendTrailingControls();
+}
+
+// ── FK navigation helpers ─────────────────────────────────────────────────────
+
+// Collect (targetColumn, value) pairs for an FK jump. `valueCols` names the
+// columns the row is read from (local columns when jumping to the parent,
+// foreign columns when listing referencing children); `filterCols` names the
+// columns the resulting filter is applied to on the target table.
+function fkRowPairs(
+  valueCols: string[],
+  filterCols: string[],
+  row: RowValue[],
+  columns: ColumnInfo[],
+): { pairs: { targetCol: string; value: RowValue }[]; missing: boolean } {
+  const pairs: { targetCol: string; value: RowValue }[] = [];
+  let missing = false;
+  for (let i = 0; i < valueCols.length; i++) {
+    const valCol = valueCols[i]!;
+    const targetCol = filterCols[i]!;
+    const colIdx = columns.findIndex((c) => c.name === valCol);
+    const value = colIdx >= 0 ? row[colIdx] ?? null : null;
+    if (value === null || value === undefined) {
+      missing = true;
+      continue;
+    }
+    pairs.push({ targetCol, value });
+  }
+  return { pairs, missing };
+}
+
+// Build the FilterRules + a column-type map for the target table (types let
+// the where-clause compiler emit bare numeric literals instead of quoted
+// ones). Reading target columns is a best-effort describe — on failure the
+// quotes still render correctly, so a catch keeps the jump working.
+async function fkPairRules(
+  pairs: { targetCol: string; value: RowValue }[],
+  schema: string | undefined,
+  table: string,
+): Promise<{ rules: FilterRule[]; columnTypes: Map<string, string> }> {
+  const ac = appState.activeConn.value;
+  const columnTypes = new Map<string, string>();
+  if (ac) {
+    try {
+      const [cols] = await ipc.describeTable(ac.connId, schema, table);
+      for (const c of cols) columnTypes.set(c.name, c.data_type);
+    } catch {
+      /* quoting fallback */
+    }
+  }
+  const rules: FilterRule[] = pairs.map((p) => ({
+    ...newRule(p.targetCol),
+    column: p.targetCol,
+    value: String(p.value),
+  }));
+  return { rules, columnTypes };
+}
+
+// Focus (or open) a table tab showing only the rows matching `rules`, with the
+// filter visible in the FilterBar and reported in the row-info line.
+function openFilteredTableTab(
+  tableName: string,
+  schema: string | undefined,
+  rules: FilterRule[],
+  columnTypes: Map<string, string>,
+) {
+  const ac = appState.activeConn.value;
+  if (!ac) return;
+  const where = compileWhereClause(rules, ac.config.engine, columnTypes);
+
+  const tableTabs = appState.openTabs.value.filter(
+    (t): t is TableTab => t.kind === "table" && t.connId === ac.connId && t.name === tableName,
+  );
+  const existing =
+    tableTabs.find(
+      (t) => (t.schema ?? undefined) === (schema ?? undefined) && (t.database ?? undefined) === (ac.selectedDatabase ?? undefined),
+    ) ?? tableTabs[0];
+
+  if (existing) {
+    switchToTab(existing.id);
+  } else {
+    openTableInNewTab(ac, tableName, schema, ac.selectedDatabase);
+  }
+
+  const s = appState.tableState.value;
+  appState.tableState.set({ ...s, whereClause: where, page: 0, keyset: null, renderedPage: null });
+  appState.filterRules.set(rules.map((r) => ({ ...r })));
+  // The tab re-render that switchToTab/openTableInNewTab just triggered already
+  // read the (stale) filterRules — push the FK filter into the live bar so the
+  // chips show why this table is filtered.
+  filterBar?.setRules(rules.map((r) => ({ ...r })));
+  if (where) {
+    appState.status.set(`Filtering ${tableName}: ${where}`);
+  }
+  activeTableReload?.();
 }
 
 // Reuse an existing tab for the same table/schema/database/conn, else create.

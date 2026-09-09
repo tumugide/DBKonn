@@ -9,6 +9,7 @@
 //! MySQL) cannot break out of its quoting.
 
 use crate::connection::DbEngine;
+use crate::query::RowValue;
 
 /// Quote an identifier (schema / table / column / index name) for `engine`,
 /// escaping the closing-quote character by doubling it.
@@ -38,6 +39,34 @@ pub fn quote_literal(engine: &DbEngine, value: &str) -> String {
             format!("'{}'", escaped)
         }
         _ => format!("'{}'", value.replace('\'', "''")),
+    }
+}
+
+/// Render a `RowValue` as the bound in a keyset comparison
+/// (`WHERE col > <bound>`), i.e. the value of the ordering column on the last
+/// row of the previous page. Numerics and booleans map to bare literals;
+/// everything else goes through [`quote_literal`]. The keyset column itself is
+/// interpolated with [`quote_ident`] by callers — these two together keep the
+/// keyset path injection-safe (see CLAUDE.md guardrail #1).
+///
+/// `NULL` deliberately renders as `NULL` (comparisons are then always false,
+/// so a NULL keyset bound simply returns an empty page) — the UI only ever
+/// chooses a keyset column with no NULLs (a single-column PK or unique index).
+pub fn render_keyset_value(engine: &DbEngine, value: &RowValue) -> String {
+    match value {
+        RowValue::Null => "NULL".to_string(),
+        RowValue::Bool(b) => {
+            if *b {
+                "TRUE".to_string()
+            } else {
+                "FALSE".to_string()
+            }
+        }
+        RowValue::Integer(i) => i.to_string(),
+        RowValue::Float(f) => f.to_string(),
+        RowValue::Text(s) => quote_literal(engine, s),
+        RowValue::Json(j) => quote_literal(engine, &j.to_string()),
+        RowValue::Binary(s) => format!("X'{}'", s),
     }
 }
 
@@ -93,5 +122,44 @@ mod tests {
     fn non_mysql_literal_leaves_backslash_alone() {
         // standard_conforming_strings: backslash is literal in pg/sqlite/mssql.
         assert_eq!(quote_literal(&DbEngine::Postgres, "a\\b"), "'a\\b'");
+    }
+
+    #[test]
+    fn keyset_value_renders_numerics_bare() {
+        assert_eq!(
+            render_keyset_value(&DbEngine::Postgres, &RowValue::Integer(42)),
+            "42"
+        );
+        assert_eq!(
+            render_keyset_value(&DbEngine::MySQL, &RowValue::Float(3.5)),
+            "3.5"
+        );
+        assert_eq!(
+            render_keyset_value(&DbEngine::Postgres, &RowValue::Bool(true)),
+            "TRUE"
+        );
+        assert_eq!(
+            render_keyset_value(&DbEngine::Postgres, &RowValue::Null),
+            "NULL"
+        );
+    }
+
+    #[test]
+    fn keyset_value_quotes_text_per_dialect() {
+        assert_eq!(
+            render_keyset_value(&DbEngine::Postgres, &RowValue::Text("it's".into())),
+            "'it''s'"
+        );
+        // MySQL backslash escaping applies in keyset bounds too.
+        assert_eq!(
+            render_keyset_value(&DbEngine::MySQL, &RowValue::Text("a\\' OR 1=1 -- ".into())),
+            "'a\\\\'' OR 1=1 -- '"
+        );
+        // JSON bound is serialized then quoted — no injection vector.
+        let j = serde_json::json!({"x": "'; DROP TABLE a;--"});
+        assert_eq!(
+            render_keyset_value(&DbEngine::Postgres, &RowValue::Json(j)),
+            "'{\"x\":\"''; DROP TABLE a;--\"}'"
+        );
     }
 }

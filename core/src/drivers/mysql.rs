@@ -8,8 +8,11 @@ use crate::{
     alter::{self, AlterRequest},
     connection::{ConnectionConfig, DbEngine},
     error::CoreError,
-    ident::quote_ident,
-    query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo, TableInfo},
+    ident::{quote_ident, render_keyset_value},
+    query::{
+        ColumnInfo, ForeignKeyInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo,
+        TableInfo,
+    },
     validator::validate_where_clause,
 };
 
@@ -430,6 +433,80 @@ impl DbConnection for MySqlDriver {
         Ok((columns, indexes))
     }
 
+    async fn list_foreign_keys(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<ForeignKeyInfo>, CoreError> {
+        // MySQL FKs: the table is a child (REFERENCED_TABLE_NAME = parent) or a
+        // parent (TABLE_NAME = parent, so the FK appears on another row). Match
+        // either by joining on the constraint name / referenced table.
+        let schema = schema.unwrap_or(&self.database);
+        let rows = sqlx::query(
+            "SELECT k.CONSTRAINT_NAME, k.TABLE_SCHEMA, k.TABLE_NAME,
+                    GROUP_CONCAT(k.COLUMN_NAME ORDER BY k.ORDINAL_POSITION) AS local_cols,
+                    k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME,
+                    NULL AS foreign_cols   -- filled below; MySQL KEY_COLUMN_USAGE gives referenced columns per local column
+             FROM information_schema.KEY_COLUMN_USAGE k
+             WHERE k.REFERENCED_TABLE_NAME IS NOT NULL
+               AND k.TABLE_SCHEMA = ?
+               AND (k.TABLE_NAME = ? OR k.REFERENCED_TABLE_NAME = ?)
+             GROUP BY k.CONSTRAINT_NAME, k.TABLE_SCHEMA, k.TABLE_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME
+             ORDER BY k.CONSTRAINT_NAME",
+        )
+        .bind(schema)
+        .bind(table)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await?;
+
+        // MySQL KEY_COLUMN_USAGE lists each column pair; reconstruct
+        // referenced columns per constraint without GROUP_CONCAT ordering bugs.
+        let mut out: Vec<ForeignKeyInfo> = Vec::new();
+        for r in &rows {
+            let constraint_name: String = r.get(0);
+            let local_schema: String = r.get(1);
+            let local_table: String = r.get(2);
+            let local_cols: Option<String> = r.get(3);
+            let foreign_schema: String = r.get(4);
+            let foreign_table: String = r.get(5);
+            let local_cols: Vec<String> = local_cols
+                .unwrap_or_default()
+                .split(',')
+                .map(|s| s.to_string())
+                .collect();
+            // Referenced columns for this constraint.
+            let fk_rows = sqlx::query(
+                "SELECT REFERENCED_COLUMN_NAME
+                 FROM information_schema.KEY_COLUMN_USAGE
+                 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND CONSTRAINT_NAME = ?
+                 ORDER BY ORDINAL_POSITION",
+            )
+            .bind(&local_schema)
+            .bind(&local_table)
+            .bind(&constraint_name)
+            .fetch_all(&self.pool)
+            .await?;
+            let foreign_cols: Vec<String> = fk_rows
+                .iter()
+                .map(|f| f.get::<String, _>(0))
+                .collect();
+            out.push(ForeignKeyInfo {
+                name: constraint_name,
+                schema: local_schema,
+                local_table,
+                local_columns: local_cols,
+                foreign_schema,
+                foreign_table,
+                foreign_columns: foreign_cols,
+            });
+        }
+        // Dedupe: a self-referencing FK would appear via both matches.
+        let mut seen = std::collections::HashSet::new();
+        out.retain(|fk| seen.insert((fk.name.clone(), fk.local_table.clone())));
+        Ok(out)
+    }
+
     async fn execute_query(&self, sql: &str) -> Result<QueryResult, CoreError> {
         let start = Instant::now();
 
@@ -509,21 +586,43 @@ impl DbConnection for MySqlDriver {
             quote_ident(&ENGINE, table)
         );
 
-        let order = if let Some(col) = &page.order_by {
-            let dir = if page.order_desc { "DESC" } else { "ASC" };
-            format!("ORDER BY {} {}", quote_ident(&ENGINE, col), dir)
-        } else {
-            String::new()
+        let base_where = where_clause.unwrap_or("").trim();
+        let (where_sql, order_sql) = match &page.keyset {
+            Some(ks) => {
+                // Keyset (cursor) step — see pg.rs for the shared rationale.
+                // Bound MUST be rendered via render_keyset_value/quote_literal
+                // (guardrail #1); the column is quoted as an identifier.
+                let kcol = quote_ident(&ENGINE, &ks.column);
+                let op = if ks.ascending { ">" } else { "<" };
+                let bound = render_keyset_value(&ENGINE, &ks.value);
+                let w = if base_where.is_empty() {
+                    format!("WHERE {kcol} {op} {bound}")
+                } else {
+                    format!("WHERE ({base_where}) AND {kcol} {op} {bound}")
+                };
+                let dir = if ks.ascending { "ASC" } else { "DESC" };
+                (w, format!("ORDER BY {kcol} {dir}"))
+            }
+            None => {
+                let w = if base_where.is_empty() {
+                    String::new()
+                } else {
+                    format!("WHERE {base_where}")
+                };
+                let o = match &page.order_by {
+                    Some(col) => {
+                        let dir = if page.order_desc { "DESC" } else { "ASC" };
+                        format!("ORDER BY {} {}", quote_ident(&ENGINE, col), dir)
+                    }
+                    None => String::new(),
+                };
+                (w, o)
+            }
         };
-
-        let where_str = where_clause
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| format!("WHERE {}", s))
-            .unwrap_or_default();
 
         let sql = format!(
             "SELECT * FROM {} {} {} LIMIT {} OFFSET {}",
-            qualified, where_str, order, page.limit, page.offset
+            qualified, where_sql, order_sql, page.limit, page.offset
         );
 
         let mut result = self.execute_query(&sql).await?;

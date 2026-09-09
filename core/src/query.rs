@@ -80,6 +80,40 @@ pub struct IndexInfo {
     pub is_primary: bool,
 }
 
+/// A single foreign-key constraint in normalized form:
+/// `local_table(local_columns) → foreign_table(foreign_columns)`.
+/// For a given table both directions are returned: constraints where it is the
+/// child (`local_table` == the table) and constraints where it is the parent
+/// (`foreign_table` == the table). This is what lets the UI jump to a
+/// referenced row (outgoing) and show referencing rows (incoming).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForeignKeyInfo {
+    pub name: String,
+    /// Schema of the local (child) table. Empty for engines without schemas
+    /// (MySQL, SQLite) where the database holds the table.
+    pub schema: String,
+    /// Child table that owns the FK columns.
+    pub local_table: String,
+    pub local_columns: Vec<String>,
+    /// Referenced (parent) table and its schema (may differ from `schema` for
+    /// cross-schema FKs on Postgres/MSSQL).
+    pub foreign_schema: String,
+    pub foreign_table: String,
+    pub foreign_columns: Vec<String>,
+}
+
+/// A sort key for keyset (cursor) pagination: the stable ordering column and
+/// the value of that column on the last row of the previous page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Keyset {
+    /// Stable column used for the keyset comparison.
+    pub column: String,
+    /// Value of `column` on the last row of the previous page.
+    pub value: RowValue,
+    /// Whether the keyset comparison is ascending (`>` for ASC).
+    pub ascending: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableInfo {
     pub schema: String,
@@ -202,10 +236,10 @@ fn contains_returning_keyword(lower: &str) -> bool {
         match c {
             b'\'' if !in_double => in_single = !in_single,
             b'"' if !in_single => in_double = !in_double,
-            _ if !in_single && !in_double => {
-                if lower[i..].starts_with("returning")
+            _ if !in_single && !in_double
+                && lower[i..].starts_with("returning")
                     && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_')
-                {
+                => {
                     let after = i + "returning".len();
                     if after >= bytes.len()
                         || (!bytes[after].is_ascii_alphanumeric() && bytes[after] != b'_')
@@ -213,7 +247,6 @@ fn contains_returning_keyword(lower: &str) -> bool {
                         return true;
                     }
                 }
-            }
             _ => {}
         }
         i += 1;
@@ -228,6 +261,11 @@ pub struct PageRequest {
     pub offset: u64,
     pub order_by: Option<String>,
     pub order_desc: bool,
+    /// Optional keyset cursor for forward pagination. When present the
+    /// driver pages with `AND col OP value ORDER BY col LIMIT n` instead of
+    /// OFFSET, avoiding the cost of re-scanning the accumulated offset rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyset: Option<Keyset>,
 }
 
 impl Default for PageRequest {
@@ -237,6 +275,7 @@ impl Default for PageRequest {
             offset: 0,
             order_by: None,
             order_desc: false,
+            keyset: None,
         }
     }
 }

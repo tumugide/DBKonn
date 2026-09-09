@@ -128,6 +128,7 @@ pub fn run() {
             commands::list_schemas,
             commands::list_tables,
             commands::describe_table,
+            commands::list_foreign_keys,
             commands::get_object_ddl,
             commands::alter_table,
             commands::execute_query,

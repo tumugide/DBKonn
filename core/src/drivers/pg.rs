@@ -8,8 +8,11 @@ use crate::{
     alter::{self, AlterRequest},
     connection::{ConnectionConfig, DbEngine},
     error::CoreError,
-    ident::quote_ident,
-    query::{ColumnInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo, TableInfo},
+    ident::{quote_ident, render_keyset_value},
+    query::{
+        ColumnInfo, ForeignKeyInfo, IndexInfo, PageRequest, QueryResult, RowValue, SchemaInfo,
+        TableInfo,
+    },
     validator::validate_where_clause,
 };
 
@@ -600,6 +603,57 @@ impl DbConnection for PgDriver {
         Ok((columns, indexes))
     }
 
+    async fn list_foreign_keys(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<ForeignKeyInfo>, CoreError> {
+        let schema = schema.unwrap_or("public");
+        // Every FK where `schema.table` is either the child (conrelid) or the
+        // parent (confrelid). Local columns come from conkey, foreign columns
+        // from confkey, both in positional order.
+        let rows = sqlx::query(
+            "SELECT
+                con.conname,
+                cn.nspname AS local_schema,
+                cl.relname AS local_table,
+                (SELECT array_agg(la.attname ORDER BY u.ord)
+                   FROM unnest(con.conkey) WITH ORDINALITY u(attnum, ord)
+                   JOIN pg_attribute la ON la.attrelid = con.conrelid AND la.attnum = u.attnum) AS local_cols,
+                rn.nspname AS foreign_schema,
+                rl.relname AS foreign_table,
+                (SELECT array_agg(ra.attname ORDER BY u2.ord)
+                   FROM unnest(con.confkey) WITH ORDINALITY u2(attnum, ord)
+                   JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = u2.attnum) AS foreign_cols
+             FROM pg_catalog.pg_constraint con
+             JOIN pg_catalog.pg_class cl ON cl.oid = con.conrelid
+             JOIN pg_catalog.pg_namespace cn ON cn.oid = cl.relnamespace
+             JOIN pg_catalog.pg_class rl ON rl.oid = con.confrelid
+             JOIN pg_catalog.pg_namespace rn ON rn.oid = rl.relnamespace
+             WHERE con.contype = 'f'
+               AND ((cn.nspname = $1 AND cl.relname = $2)
+                 OR (rn.nspname = $1 AND rl.relname = $2))
+             ORDER BY con.conname",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|r| ForeignKeyInfo {
+                name: r.get(0),
+                schema: r.get(1),
+                local_table: r.get(2),
+                local_columns: r.try_get::<Vec<String>, _>(3).unwrap_or_default(),
+                foreign_schema: r.get(4),
+                foreign_table: r.get(5),
+                foreign_columns: r.try_get::<Vec<String>, _>(6).unwrap_or_default(),
+            })
+            .collect())
+    }
+
     async fn execute_query(&self, sql: &str) -> Result<QueryResult, CoreError> {
         let start = Instant::now();
 
@@ -680,21 +734,44 @@ impl DbConnection for PgDriver {
             quote_ident(&ENGINE, table)
         );
 
-        let order = if let Some(col) = &page.order_by {
-            let dir = if page.order_desc { "DESC" } else { "ASC" };
-            format!("ORDER BY {} {}", quote_ident(&ENGINE, col), dir)
-        } else {
-            String::new()
+        let base_where = where_clause.unwrap_or("").trim();
+        let (where_sql, order_sql) = match &page.keyset {
+            Some(ks) => {
+                // Keyset (cursor) step: `WHERE [filter] AND col OP bound
+                // ORDER BY col dir` instead of OFFSET. The bound arrives from
+                // the webview so it MUST be quoted (guardrail #1); the column
+                // is quoted as an identifier. OFFSET stays 0 for these steps.
+                let kcol = quote_ident(&ENGINE, &ks.column);
+                let op = if ks.ascending { ">" } else { "<" };
+                let bound = render_keyset_value(&ENGINE, &ks.value);
+                let w = if base_where.is_empty() {
+                    format!("WHERE {kcol} {op} {bound}")
+                } else {
+                    format!("WHERE ({base_where}) AND {kcol} {op} {bound}")
+                };
+                let dir = if ks.ascending { "ASC" } else { "DESC" };
+                (w, format!("ORDER BY {kcol} {dir}"))
+            }
+            None => {
+                let w = if base_where.is_empty() {
+                    String::new()
+                } else {
+                    format!("WHERE {base_where}")
+                };
+                let o = match &page.order_by {
+                    Some(col) => {
+                        let dir = if page.order_desc { "DESC" } else { "ASC" };
+                        format!("ORDER BY {} {}", quote_ident(&ENGINE, col), dir)
+                    }
+                    None => String::new(),
+                };
+                (w, o)
+            }
         };
-
-        let where_str = where_clause
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| format!("WHERE {}", s))
-            .unwrap_or_default();
 
         let sql = format!(
             "SELECT * FROM {} {} {} LIMIT {} OFFSET {}",
-            qualified, where_str, order, page.limit, page.offset
+            qualified, where_sql, order_sql, page.limit, page.offset
         );
 
         let mut result = self.execute_query(&sql).await?;
